@@ -49,7 +49,25 @@ app = FastAPI()
 def root():
     try:
         logger.info("Request received at root endpoint")
-        return {"message": "Hello World"}
+        return {
+            "api_name": "Sincronizacion de Tiendanube",
+            "version": "1.0.0",
+            "description": "API para recibir webhooks de Shopify y sincronizar con Tiendanube",
+            "status": "online",
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
-        logger.error(f"Error occurred: {e}")
+        logger.exception("Error occurred at root endpoint")
         return {"error": "An error occurred"}
+
+
+@app.post("/sync-tiendanube")
+def sync(body: dict):
+    try:
+        logger.info("Request received at sync-tiendanube endpoint")
+        # Obtengo el body de la request
+        print(body)
+        return {"message": "Sincronización exitosa"}
+    except Exception as e:
+        logger.exception("Error occurred during synchronization")
+        return {"error": "An error occurred during synchronization"}
