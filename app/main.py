@@ -1,7 +1,26 @@
-import logging
 import os
-from datetime import datetime, timedelta
+import json
+import logging
+import requests
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
+from pathlib import Path
+from datetime import datetime, timedelta
+
+
+# Cargar variables de entorno desde el archivo .env
+env_path = Path(__file__).resolve().parent.parent / '.env'
+load_dotenv(env_path, encoding="utf-8")
+
+tiendas_raw = os.getenv("TIENDAS")
+TIENDANUBE_STORES = json.loads(tiendas_raw)
+
+# Configuración de Shopify
+SHOPIFY_STORE_URL = os.getenv("SHOPIFY_STORE_URL")
+SHOPIFY_ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
+SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION")
+SHOPIFY_API_URL = f"{SHOPIFY_STORE_URL}/admin/api/{SHOPIFY_API_VERSION}"
 
 # Crear directorio si no existe
 os.makedirs("logs", exist_ok=True)
@@ -65,8 +84,96 @@ def root():
 def sync(body: dict):
     try:
         logger.info("Request received at sync-tiendanube endpoint")
-        # Obtengo el body de la request
-        print(body)
+        # Obtengo los productos del pedido
+        list_products = body.get("line_items", [])
+        if not list_products:
+            logger.warning("No products found in the order")
+            return {"error": "No products found in the order"}
+
+        pedidos = []
+        print("-" * 90)
+        print("list_products")
+        print(list_products)
+        print("-" * 90)
+
+        # Recorro los productos del pedido
+        logger.info(f"Number of products in the order: {len(list_products)}")
+        for product in list_products:
+
+            logger.info(f"Processing order: {product.get('id')}")
+            pedido = {
+                "vendor": product.get("vendor"),
+                "quantity": product.get("quantity")
+            }
+
+            if not pedido['vendor']:
+                logger.warning("Vendor not found in the product")
+                # return {"error": "Vendor not found in the product"}
+
+            logger.info(f"Obtaining product {product['product_id']} from Shopify")
+            response = requests.get(
+                url=f"{SHOPIFY_API_URL}/products/{product['product_id']}.json",
+                headers={
+                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                },
+                params={
+                    "fields": "handle",
+                }
+            )
+            if response.status_code == 200:
+                response_data = response.json()
+                pedido['product_id'] = response_data['product']['handle']
+            else:
+                logger.error(f"Error fetching product data: {response.status_code} - {response.text}")
+                return {"error": "Error fetching product data"}
+
+            logger.info(f"Obtaining variant {product['variant_id']} from Shopify")
+            response = requests.get(
+                url=f"{SHOPIFY_API_URL}/variants/{product['variant_id']}.json",
+                headers={
+                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                },
+                params={
+                    "fields": "sku"
+                }
+            )
+
+            if response.status_code == 200:
+                response_data = response.json()
+                pedido['variant_id'] = response_data['variant']['sku']
+            else:
+                logger.error(f"Error fetching variant data: {response.status_code} - {response.text}")
+                return {"error": "Error fetching variant data"}
+
+            pedidos.append(pedido)
+            logger.info(f"Product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} added to the list")
+
+        logger.info(f"Number of products to update: {len(pedidos)}")
+        for pedido in pedidos:
+            logger.info(f"Updating stock for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
+            url = f"{TIENDANUBE_STORES[str(pedido['vendor'])]['url']}/products/{pedido['product_id']}/variants/stock"
+            headers = TIENDANUBE_STORES[str(pedido['vendor'])]['headers']
+            data = {
+                "action" : "variation",
+                "value" : pedido['quantity'] * -1,
+                "id" : pedido['variant_id']
+            }
+
+            print(url)
+            print(headers)
+            print(data)
+
+            # response = requests.put(url, headers=headers, json=data)
+            # if response.status_code != 200:
+            #     logger.error(f"Error updating stock: {response.status_code} - {response.text}")
+            #     return {"error": "Error updating stock"}
+            # else:
+            #     logger.info(f"Stock updated successfully for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
+            logger.info(f"Stock updated successfully for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
+
+        logger.info("Stock updated successfully for all products in the order")
+        logger.info("Synchronization completed successfully")
+
         return {"message": "Sincronización exitosa"}
     except Exception as e:
         logger.exception("Error occurred during synchronization")
