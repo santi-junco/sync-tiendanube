@@ -91,10 +91,6 @@ def sync(body: dict):
             return {"error": "No products found in the order"}
 
         pedidos = []
-        print("-" * 90)
-        print("list_products")
-        print(list_products)
-        print("-" * 90)
 
         # Recorro los productos del pedido
         logger.info(f"Number of products in the order: {len(list_products)}")
@@ -159,17 +155,13 @@ def sync(body: dict):
                 "id" : pedido['variant_id']
             }
 
-            print(url)
-            print(headers)
-            print(data)
-
-            # response = requests.put(url, headers=headers, json=data)
-            # if response.status_code != 200:
-            #     logger.error(f"Error updating stock: {response.status_code} - {response.text}")
-            #     return {"error": "Error updating stock"}
-            # else:
-            #     logger.info(f"Stock updated successfully for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
-            logger.info(f"Stock updated successfully for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
+            logger.info(f"Sending request to {url} with data {data}")
+            response = requests.post(url, headers=headers, json=data)
+            if response.status_code != 200:
+                logger.error(f"Error updating stock: {response.status_code} - {response.text}")
+                return {"error": "Error updating stock"}
+            else:
+                logger.info(f"Stock updated successfully for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
 
         logger.info("Stock updated successfully for all products in the order")
         logger.info("Synchronization completed successfully")
