@@ -177,12 +177,16 @@ def sync(body: dict):
 
 
 def sync_stock():
-    logger.info("Synchronizing stock...")
+    logger.info("==========> Synchronizing stock... <==========")
     try:
         # Obtengo los productos de Tiendanube
         updated_at_min = (datetime.now() - timedelta(minutes=15)).isoformat()
         for tienda in TIENDANUBE_STORES:
+            logger.info("#" * 50)
             logger.info(f"Fetching products from Tiendanube ID {tienda}")
+
+            # Obtengo todas las variatnes de los productos de Tiendanube que fueron actualizadas en los ultimos 15 minutos
+            products_variants = []
             url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
             headers = TIENDANUBE_STORES[tienda]['headers']
             params = {
@@ -195,21 +199,22 @@ def sync_stock():
             response = requests.get(url, headers=headers, params=params)
             if response.status_code == 200:
                 products_variants = response.json()
-                logger.info(f"Fetched {len(products_variants)} variants from Tiendanube")
+                logger.info(f"Fetched {len(products_variants)} products from Tiendanube")
             else:
                 logger.error(f"Error fetching variants from Tiendanube: {response.status_code} - {response.text}")
 
+            # Obtengo solamente las variantes que fueron actualizadas en los ultimos 15 minutos
             tiendanube_variantes = []
             for product_variant in products_variants:
                 for variant in product_variant.get("variants", []):
                     fecha_variante = datetime.strptime(variant["updated_at"], "%Y-%m-%dT%H:%M:%S%z").isoformat()
                     if fecha_variante >= updated_at_min:
                         tiendanube_variantes.append(variant)
-
             logger.info(f"Fetched {len(tiendanube_variantes)} filtered variants from Tiendanube")
 
+            # Obtengo las variantes del producto de Shopify por el handle que es el id del producto en Tiendanube
             for tiendanube_variant in tiendanube_variantes:
-                logger.info(f"Processing variant {tiendanube_variant['id']} from Tiendanube")
+                logger.info(f"Getting product with handle {tiendanube_variant['product_id']} from Shopify")
                 url = f"{SHOPIFY_API_URL}/products.json"
                 headers = {
                     "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
@@ -227,10 +232,13 @@ def sync_stock():
                     logger.error(f"Error fetching products from Shopify: {response.status_code} - {response.text}")
                     continue
 
+                # Formateo la respuesta para obtener solamente una lista de variantes
                 shopify_variantes = []
                 for product in response_data.get("products", []):
                     shopify_variantes.extend(product.get("variants", []))
 
+                # Recorro las variantes de Shopify, comparando el sku de la variante de Shopify con el id de la variante de Tiendanube
+                # y si los stocks son diferentes, actualizo el stock de la variante de Shopify
                 for shopify_variant in shopify_variantes:
                     logger.info(f"Processing variant {shopify_variant['id']} from Shopify")
                     if shopify_variant["sku"] == str(tiendanube_variant["id"]) and shopify_variant["inventory_quantity"] != tiendanube_variant["stock"]:
@@ -259,7 +267,7 @@ def sync_stock():
 @app.on_event("startup")
 def start_scheduler():
     logger.info("Starting scheduler")
-    scheduler.add_job(sync_stock, 'interval', minutes=10)
+    scheduler.add_job(sync_stock, 'interval', minutes=15)
     scheduler.start()
 
 
