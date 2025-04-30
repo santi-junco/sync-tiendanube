@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from pathlib import Path
 from datetime import datetime, timedelta
+from apscheduler.schedulers.background import BackgroundScheduler
 
 
 # Cargar variables de entorno desde el archivo .env
@@ -63,6 +64,9 @@ logger.addHandler(console_handler)
 logger.propagate = False
 
 app = FastAPI()
+
+# Scheduler
+scheduler = BackgroundScheduler()
 
 @app.get("/")
 def root():
@@ -170,3 +174,96 @@ def sync(body: dict):
     except Exception as e:
         logger.exception("Error occurred during synchronization")
         return {"error": "An error occurred during synchronization"}
+
+
+def sync_stock():
+    logger.info("Synchronizing stock...")
+    try:
+        # Obtengo los productos de Tiendanube
+        updated_at_min = (datetime.now() - timedelta(minutes=15)).isoformat()
+        for tienda in TIENDANUBE_STORES:
+            logger.info(f"Fetching products from Tiendanube ID {tienda}")
+            url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
+            headers = TIENDANUBE_STORES[tienda]['headers']
+            params = {
+                "per_page": 200,
+                "published": "true",
+                "min_stock": 1,
+                "fields": "variants",
+                "updated_at_min": updated_at_min
+            }
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                products_variants = response.json()
+                logger.info(f"Fetched {len(products_variants)} variants from Tiendanube")
+            else:
+                logger.error(f"Error fetching variants from Tiendanube: {response.status_code} - {response.text}")
+
+            tiendanube_variantes = []
+            for product_variant in products_variants:
+                for variant in product_variant.get("variants", []):
+                    fecha_variante = datetime.strptime(variant["updated_at"], "%Y-%m-%dT%H:%M:%S%z").isoformat()
+                    if fecha_variante >= updated_at_min:
+                        tiendanube_variantes.append(variant)
+
+            logger.info(f"Fetched {len(tiendanube_variantes)} filtered variants from Tiendanube")
+
+            for tiendanube_variant in tiendanube_variantes:
+                logger.info(f"Processing variant {tiendanube_variant['id']} from Tiendanube")
+                url = f"{SHOPIFY_API_URL}/products.json"
+                headers = {
+                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                }
+                params = {
+                    "fields": "variants",
+                    "handle": tiendanube_variant["product_id"]
+                }
+
+                response = requests.get(url, headers=headers, params=params)
+                if response.status_code == 200:
+                    response_data = response.json()
+                    logger.info(f"Fetched {len(response_data)} products from Shopify")
+                else:
+                    logger.error(f"Error fetching products from Shopify: {response.status_code} - {response.text}")
+                    continue
+
+                shopify_variantes = []
+                for product in response_data.get("products", []):
+                    shopify_variantes.extend(product.get("variants", []))
+
+                for shopify_variant in shopify_variantes:
+                    logger.info(f"Processing variant {shopify_variant['id']} from Shopify")
+                    if shopify_variant["sku"] == str(tiendanube_variant["id"]) and shopify_variant["inventory_quantity"] != tiendanube_variant["stock"]:
+                        logger.info(f"Updating stock for variant {shopify_variant['id']} from Shopify")
+                        url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
+                        headers = {
+                            "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                        }
+                        data = {
+                            "location_id": 104501772590,  # TODO por ahora esta herdcodeado pero hay que hacer la peticion para obtenerlo
+                            "inventory_item_id": shopify_variant['inventory_item_id'],
+                            "available": tiendanube_variant["stock"]
+                        }
+
+                        response = requests.post(url, headers=headers, json=data)
+                        if response.status_code == 200:
+                            logger.info(f"Stock updated successfully for variant {shopify_variant['id']} from Shopify")
+                        else:
+                            logger.error(f"Error updating stock: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        logger.exception("Error occurred during stock synchronization")
+        return {"error": "An error occurred during stock synchronization"}
+
+
+@app.on_event("startup")
+def start_scheduler():
+    logger.info("Starting scheduler")
+    scheduler.add_job(sync_stock, 'interval', minutes=10)
+    scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    logger.info("Shutting down scheduler")
+    scheduler.shutdown()
