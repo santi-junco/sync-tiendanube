@@ -1,10 +1,14 @@
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 import os
 import json
 import logging
+import sys
 import requests
 import certifi
+from bs4 import BeautifulSoup
+import html
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -28,6 +32,7 @@ SHOPIFY_STORE_URL = os.getenv("SHOPIFY_STORE_URL")
 SHOPIFY_ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
 SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION")
 SHOPIFY_API_URL = f"{SHOPIFY_STORE_URL}/admin/api/{SHOPIFY_API_VERSION}"
+STOP_WORDS = {"y", "de", "la", "el", "los", "las", "para", "a", "en"}
 
 # Crear directorio si no existe
 os.makedirs("logs", exist_ok=True)
@@ -307,43 +312,66 @@ def sync_products():
 
             # Obtengo los productos de Tiendanube
             products = []
-            url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
             headers = TIENDANUBE_STORES[tienda]['headers']
+            products_quantity = TIENDANUBE_STORES[tienda].get('products_quantity')
 
-            # TODO ver como hacer cuando quieren traer cierta cantidad de productos
-            # posible solucion: definir los params en el .env
-            params = {
-                "per_page": 200,
-                "published": "true",
-                "min_stock": 1,
-                # "updated_at_min": updated_at_min  # TODO por el momento no lo uso pero despues va a ser cada 24 hrs
-            }
-            response = requests.get(url, headers=headers, params=params)
-            if response.status_code == 200:
-                products = response.json()
-                logger.info(f"Fetched {len(products)} products from Tiendanube")
-            else:
-                logger.error(f"Error fetching products from Tiendanube: {response.status_code} - {response.text}")
+            fetched = 0
+            page = 1
+            products = []
+
+            while True:
+                remaining = products_quantity - fetched if products_quantity else 200
+                per_page = min(200, remaining)
+                params = {
+                    "per_page": per_page,
+                    "page": page,
+                    "published": "true",
+                    "min_stock": 1,
+                    "sortby": "created_at_descending",
+                    # "updated_at_min": updated_at_min  # Se puede agregar luego si es necesario
+                }
+
+                url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
+                response = requests.get(url, headers=headers, params=params)
+
+                if response.status_code != 200:
+                    logger.error(f"Error fetching products (page {page}) from Tiendanube: {response.status_code} - {response.text}")
+                    break
+
+
+                current_products = response.json()
+                if not current_products:
+                    break
+
+                products.extend(current_products)
+                fetched += len(current_products)
+
+                logger.info(f"Fetched {len(current_products)} products on page {page} (Total: {fetched})")
+
+                # Si se especificó un límite y lo alcanzamos, cortamos
+                if products_quantity and fetched >= products_quantity:
+                    products = products[:products_quantity]
+                    break
+
+                # Si trajo menos de per_page, ya no hay más páginas
+                if len(current_products) < per_page:
+                    break
+
+                page += 1
 
             for product in products:
-                tiendanube_attributes = {}
-                logger.info(f"Processing product {product['id']} from Tiendanube")
-                # Creo un array con el valor de "attributes" de cada producto
-                for index, attribute in enumerate(product.get("attributes", []), 1):
-                    tiendanube_attributes[f"option{index}"] = attribute["es"]  # Cambié el nombre de la clave a "option{index}"
 
-                logger.info(f"Attributes for product {product['id']}: {tiendanube_attributes}")
+                logger.info(f"Processing product {product['id']} from Tiendanube")
 
                 # Creo un array de las variantes de cada producto
                 tiendanube_variants = []
                 relacion_variante_imagen = []
                 for variant in product.get("variants", []):
-                    stock = 0
-                    # si el stock viene null es porque es infinito
-                    if variant["stock"] == None:
-                        stock = 999
-                    if variant["stock"] > 0 :
-                        stock = variant["stock"]
+                    stock = variant["stock"] if variant["stock"] is not None else 999
+                    values = [v.get("es") for v in variant.get("values", [])]
+                    option1 = values[0] if len(values) > 0 else None
+                    option2 = values[1] if len(values) > 1 else None
+                    option3 = values[2] if len(values) > 2 else None
 
                     tiendanube_variants.append({
                         "sku": variant["id"],
@@ -351,9 +379,9 @@ def sync_products():
                         "price": calculate_price(variant["price"], variant["promotional_price"]),
                         "weight": variant["weight"],
                         "barcode": variant["barcode"],
-                        "option1": tiendanube_attributes.get("option1", None),
-                        "option2": tiendanube_attributes.get("option2", ""),
-                        "option3": tiendanube_attributes.get("option3", ""),
+                        "option1": option1,
+                        "option2": option2,
+                        "option3": option3,
                         "taxcode": None,
                         "position": variant["position"],
                         "weight_unit": None,
@@ -374,24 +402,28 @@ def sync_products():
 
                 logger.info(f"Fetched {len(tiendanube_variants)} variants for product {product['id']}")
 
-                # Creo un array con las imagenes de cada producto
                 tiendanube_images = []
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    futuros = {executor.submit(descargar_y_convertir, img): img for img in product.get("images", [])}
-                    for futuro in as_completed(futuros):
-                        data = futuro.result()
-                        if data:
-                            tiendanube_images.append(data)
+                for img in product.get("images", []):
+                    imagen = preparar_imagen_por_src(img)
+                    if imagen:
+                        tiendanube_images.append(imagen)
 
-                logger.info(f"Fetched {len(tiendanube_images)} images for product {product['id']}")
+                existing_tags = set(product.get("tags", "").split(","))
 
-                # Obtengo los tags de cada producto
-                tiendanube_tags = product.get("tags", '')
-                tiendanube_tags += f", {tienda}, {TIENDANUBE_STORES[tienda]['category']}"
-                for category in product.get("categories", []):
-                    if category["name"]["es"] not in tiendanube_tags:
-                        tiendanube_tags += f", {category['name']['es']}"
-                tiendanube_tags = tiendanube_tags.split(",")
+                # Limpiá espacios (por si vienen tags con espacio al principio o final)
+                existing_tags = {tag.strip() for tag in existing_tags if tag.strip()}
+
+                # Agregá las categorías si no están ya
+                for handle_category in product.get("categories", []):
+                    tag_name = handle_category["handle"]["es"].strip()
+                    if tag_name not in existing_tags:
+                        existing_tags.add(tag_name)
+
+                existing_tags.add(tienda)
+                existing_tags.add(TIENDANUBE_STORES[tienda]['category'])
+
+                # Convertilo de nuevo a lista si necesitás
+                tiendanube_tags = list(existing_tags)
 
                 logger.info(f"Tags for product {product['id']}: {tiendanube_tags}")
 
@@ -414,6 +446,14 @@ def sync_products():
                     logger.error(f"Error fetching products from Shopify: {response.status_code} - {response.text}")
                     continue
 
+                # formateo los atributos = options
+                tiendanube_attributes = [{"name": attr.get("es")} for attr in product.get("attributes", [])]
+
+                product_description = product["description"]["es"]
+                soup = BeautifulSoup(product_description, "html.parser")
+                text_only = soup.get_text(separator="\n")
+                product_description = html.unescape(text_only)
+
                 if shopify_product:
                     # Si el producto existe, lo actualizo
                     logger.info(f"Updating product {product['id']} in Shopify")
@@ -426,14 +466,13 @@ def sync_products():
                             "id": shopify_product['id'],
                             "handle": product["id"],
                             "title": product["name"]["es"],
-                            "body_html": product["description"]["es"],
+                            "body_html": product_description,
                             "vendor": tienda,
                             "product_type": TIENDANUBE_STORES[tienda]['category'],
                             "tags": tiendanube_tags,
                             "variants": tiendanube_variants,
                             "published": product["published"],
-                            "options": tiendanube_attributes,
-                            "images": tiendanube_images,
+                            "options": tiendanube_attributes
                         }
                     }
 
@@ -453,114 +492,119 @@ def sync_products():
                     data = {
                         "product": {
                             "title": product["name"]["es"],
-                            "body_html": product["description"]["es"],
+                            "handle": product["id"],
+                            "options": tiendanube_attributes,
+                            "body_html": product_description,
                             "vendor": tienda,
                             "product_type": TIENDANUBE_STORES[tienda]['category'],
                             "tags": tiendanube_tags,
-                            "variants": tiendanube_variants,
-                            "images": tiendanube_images,
-                            "options": tiendanube_attributes,
-                            "handle": product["id"],
                             "published": product["published"],
-                            "status": "active"
+                            "status": "active",
+                            "variants": tiendanube_variants
                         }
                     }
 
                     response = requests.post(url, headers=headers, json=data)
+
                     if response.status_code == 201:
                         logger.info(f"Product {product['id']} created successfully in Shopify")
                     else:
                         logger.error(f"Error creating product: {response.status_code} - {response.text}")
-                    # Si el producto se crea correctamente, actualizo las imagenes
-                    if response.status_code == 201:
-                        shopify_product = response.json().get("product", [])
-                        logger.info(f"Updating images for product {product['id']} in Shopify")
-                        for image in tiendanube_images:
-                            # Busco la variante en shopify por el id de la variante en Tiendanube
-                            variant_id = next((item for item in relacion_variante_imagen if item["image_id"] == image["alt"]), None)
-                            if variant_id:
-                                url = f"{SHOPIFY_API_URL}/products/{shopify_product['id']}/images.json"
-                                headers = {
-                                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                                }
-                                data = {
-                                    "image": {
-                                        "variant_ids": [variant_id["variant_id"]],
-                                        "position": image["position"],
-                                        "attachment": image["data"].getvalue()
-                                    }
-                                }
+                # Si el producto se crea correctamente, actualizo las imagenes
+                if response.status_code in [200, 201]:
 
-                                response = requests.post(url, headers=headers, json=data)
-                                if response.status_code == 201:
-                                    logger.info(f"Image {image['alt']} updated successfully for product {product['id']} in Shopify")
-                                else:
-                                    logger.error(f"Error updating image: {response.status_code} - {response.text}")
+                    shopify_product = response.json().get("product", [])
+
+# Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
+                shopify_variant_map = {}
+                for variant in shopify_product.get("variants", []):
+                    shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
+
+                logger.info(f"Updating images for product {product['id']} in Shopify")
+
+                prod_img_shopify = set()
+                url = f"{SHOPIFY_API_URL}/products/{shopify_product['id']}/images.json"
+                headers = {
+                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                }
+
+                response = requests.get(url, headers=headers)
+                if response.status_code == 200:
+                    prod_img_shopify = {str(img.get("alt")) for img in response.json().get("images", [])}
+
+                logger.info(f"Fetched {len(prod_img_shopify)} images from Shopify's product ID {shopify_product['id']}")
+
+                images_to_upload = [
+                    img for img in tiendanube_images
+                    if str(img.get("alt")) not in prod_img_shopify
+                ]
+                logger.info(f"{len(images_to_upload)} images to load to Shopify")
+
+                def upload_image_to_shopify(image, variant_ids, shopify_url, headers):
+                    data = {
+                        "image": {
+                            **image
+                        }
+                    }
+                    if variant_ids:
+                        data["image"]["variant_ids"] = variant_ids
+
+                    response = requests.post(shopify_url, json=data, headers=headers)
+                    return {
+                        "status": response.status_code,
+                        "response": response.json(),
+                        "image_alt": image.get("alt")
+                    }
+
+                futures = []
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    for image in images_to_upload:
+                        image_id = image.get("alt")
+                        # ⚠️ Convertir los variant_ids de Tiendanube a los de Shopify (vía SKU)
+                        variant_ids = [
+                            shopify_variant_map.get(str(rel["variant_id"]))
+                            for rel in relacion_variante_imagen
+                            if rel["image_id"] == image_id and shopify_variant_map.get(str(rel["variant_id"])) is not None
+                        ]
+
+                        futures.append(
+                            executor.submit(upload_image_to_shopify, image, variant_ids, url, headers)
+                        )
+
+                    for future in as_completed(futures):
+                        result = future.result()
+                        print(f"Image {result['image_alt']} -> Status: {result['status']}")
+                        if result["status"] != 200:
+                            print(f"❌ Error: {result['response']}")
+
+
                 logger.info(f"Product {product['id']} processed successfully")
 
     except Exception as e:
         logger.exception("Error occurred during product synchronization, Error: %s", str(e))
 
-# def descargar_y_convertir(img):
-#     try:
-#         response = requests.get(img['src'], stream=True)
-#         if response.status_code == 200:
-#             image_data = BytesIO(response.content)
-#             image_data.seek(0)
-#             return {
-#                 "alt": img["id"],
-#                 "data": str(image_data.getvalue()),
-#                 "position": img["position"],
-#             }
-#     except Exception as e:
-#         logger.error(f"Error downloading image {img['src']}: {e}")
-#         return None
 
-
-def descargar_y_convertir(img, gray_color=(120, 120, 120)):
+def preparar_imagen_por_src(img):
     try:
-        response = requests.get(img['src'], stream=True)
-        response.raise_for_status()
-
-        # Abrir la imagen original
-        img_original = Image.open(BytesIO(response.content))
-
-        # Eliminar el fondo
-        img_no_bg = remove(img_original)
-
-        # Crear fondo gris
-        img_with_gray_bg = Image.new('RGB', img_no_bg.size, gray_color)
-
-        # Pegar imagen sin fondo encima del gris
-        if img_no_bg.mode == 'RGBA':
-            img_with_gray_bg.paste(img_no_bg, (0, 0), img_no_bg)
-        else:
-            img_with_gray_bg.paste(img_no_bg, (0, 0))
-
-        # Guardar en memoria
-        output = BytesIO()
-        img_with_gray_bg.save(output, format='PNG')
-        output.seek(0)
-
         return {
-            "alt": img["id"],
-            "data": str(output.getvalue()),  # o usar base64 si prefieres
-            "position": img["position"],
+            "src": img['src'],
+            "alt": img.get("id", ""),
+            "position": img.get("position", 1)
         }
-
     except Exception as e:
-        logger.error(f"Error procesando imagen {img['src']}: {e}")
+        logger.error(f"Error procesando imagen {img.get('src', '')}: {e}")
         return None
 
 
-def build_full_handle(category, category_by_id):
+def build_full_handle(category_gral, category, category_by_id):
     handles = []
     current = category
     while current:
         handles.insert(0, current["handle"]["es"])  # prepend
         parent_id = current["parent"]
         current = category_by_id.get(parent_id) if parent_id else None
-    return "-".join(handles)
+    handles.insert(0, category_gral)
+    return ",".join(handles)
 
 
 def create_smart_collections():
@@ -605,41 +649,54 @@ def create_smart_collections():
         category_by_id = {cat["id"]: cat for cat in categories}
 
         # Construir las colecciones con handle completo desde raíz
-        smart_collections_full_hierarchy = []
 
         for category in categories:
+            smart_collections_full_hierarchy = {}
             name = category["name"]["es"]
-            full_handle = build_full_handle(category, category_by_id)
+            full_handle = build_full_handle(TIENDANUBE_STORES[tienda]['category'], category, category_by_id)
 
             # Verificar si la colección ya existe en Shopify
             if full_handle in shopify_collections:
                 logger.info(f"Collection {full_handle} already exists in Shopify")
                 continue
 
-            smart_collections_full_hierarchy.append({
+            smart_collections_full_hierarchy = {
                 "smart_collection": {
                     "title": name,
-                    "handle": full_handle,
+                    "handle": full_handle.replace(',', '-'),
                     "rules": [
                         {
                             "column": "tag",
                             "relation": "equals",
                             "condition": handle
-                        } for handle in full_handle.split("-")
+                        } for handle in full_handle.split(",")
                     ],
                     "published": True
                 }
-            })
+            }
 
-        # TODO momento de pegarle a shopify para crear las colecciones 
+            url = f"{SHOPIFY_API_URL}/smart_collections.json"
+            headers = {
+                "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+            }
+
+            response = requests.post(url=url, headers=headers, json=smart_collections_full_hierarchy)
+
+            if response.status_code == 201:
+                logger.info(f"Smart collection {name} created successfully")
+            else:
+                logger.error(f"Error creating smart collection {name}: {response.status_code} - {response.text} - {smart_collections_full_hierarchy}")
 
 
 @app.on_event("startup")
 def start_scheduler():
+    logger.info("Starting sync_products")
+    sync_products()
+
     logger.info("Starting scheduler")
     # scheduler.add_job(sync_stock, 'interval', minutes=15)
-    # scheduler.add_job(sync_products, 'interval', seconds=15)
-    scheduler.add_job(create_smart_collections, 'interval', seconds=10)
+    # scheduler.add_job(sync_products, 'interval', minutes=10)
+    # scheduler.add_job(create_smart_collections, 'interval', minutes=10)
     scheduler.start()
 
 
