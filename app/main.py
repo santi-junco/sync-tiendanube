@@ -1,23 +1,18 @@
-import base64
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from io import BytesIO
+import time
 import os
 import json
 import logging
-import sys
 import requests
 import certifi
-from bs4 import BeautifulSoup
 import html
 
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from pathlib import Path
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from apscheduler.schedulers.background import BackgroundScheduler
-
-from PIL import Image
-from rembg import remove
 
 
 # Cargar variables de entorno desde el archivo .env
@@ -302,11 +297,12 @@ def calculate_price(price, promotional_price):
 
 
 def sync_products():
+    start_time = time.time()
     logger.info("==========> Synchronizing products... <==========")
     try:
         for tienda in TIENDANUBE_STORES:
             logger.info("#" * 50)
-            logger.info(f"Fetching products from Tiendanube ID {tienda}")
+            logger.info(f"Fetching products from {TIENDANUBE_STORES[tienda]['name']}")
 
             updated_at_min = (datetime.now() - timedelta(days=1)).isoformat()
 
@@ -327,7 +323,7 @@ def sync_products():
                     "page": page,
                     "published": "true",
                     "min_stock": 1,
-                    "sortby": "created_at_descending",
+                    "sort_by": "created-at-descending",
                     # "updated_at_min": updated_at_min  # Se puede agregar luego si es necesario
                 }
 
@@ -429,6 +425,7 @@ def sync_products():
 
                 # busco el producto en shopify por su handle, que es el id del producto en Tiendanube
                 logger.info(f"Searching for product {product['id']} in Shopify")
+                time.sleep(1)
                 shopify_product = None
                 url = f"{SHOPIFY_API_URL}/products.json"
                 headers = {
@@ -448,6 +445,10 @@ def sync_products():
 
                 # formateo los atributos = options
                 tiendanube_attributes = [{"name": attr.get("es")} for attr in product.get("attributes", [])]
+                if not tiendanube_attributes:
+                    tiendanube_attributes.append({
+                        "name": "Title"
+                    })
 
                 product_description = product["description"]["es"]
                 soup = BeautifulSoup(product_description, "html.parser")
@@ -472,7 +473,7 @@ def sync_products():
                             "tags": tiendanube_tags,
                             "variants": tiendanube_variants,
                             "published": product["published"],
-                            "options": tiendanube_attributes
+                            "options": tiendanube_attributes or shopify_product['options']
                         }
                     }
 
@@ -515,7 +516,7 @@ def sync_products():
 
                     shopify_product = response.json().get("product", [])
 
-# Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
+                # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
                 shopify_variant_map = {}
                 for variant in shopify_product.get("variants", []):
                     shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
@@ -582,6 +583,15 @@ def sync_products():
 
     except Exception as e:
         logger.exception("Error occurred during product synchronization, Error: %s", str(e))
+
+    end_time = time.time()
+    duracion = end_time - start_time
+
+    horas = int(duracion // 3600)
+    minutos = int((duracion % 3600) // 60)
+    segundos = duracion % 60
+
+    logger.info(f"Tiendanube ID {tienda} products were created/updated in {horas}h {minutos}m {segundos:.2f}s")
 
 
 def preparar_imagen_por_src(img):
@@ -688,15 +698,16 @@ def create_smart_collections():
                 logger.error(f"Error creating smart collection {name}: {response.status_code} - {response.text} - {smart_collections_full_hierarchy}")
 
 
-@app.on_event("startup")
-def start_scheduler():
-    logger.info("Starting sync_products")
+def collection_and_products():
+    create_smart_collections()
     sync_products()
 
+
+@app.on_event("startup")
+def start_scheduler():
     logger.info("Starting scheduler")
-    # scheduler.add_job(sync_stock, 'interval', minutes=15)
-    # scheduler.add_job(sync_products, 'interval', minutes=10)
-    # scheduler.add_job(create_smart_collections, 'interval', minutes=10)
+    scheduler.add_job(sync_stock, 'interval', minutes=15)
+    scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
     scheduler.start()
 
 
