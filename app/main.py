@@ -28,6 +28,7 @@ SHOPIFY_ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
 SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION")
 SHOPIFY_API_URL = f"{SHOPIFY_STORE_URL}/admin/api/{SHOPIFY_API_VERSION}"
 STOP_WORDS = {"y", "de", "la", "el", "los", "las", "para", "a", "en"}
+DEFAULT_DEPOSIT = "104501772590"
 
 # Crear directorio si no existe
 os.makedirs("logs", exist_ok=True)
@@ -247,16 +248,17 @@ def sync_stock():
                 # y si los stocks son diferentes, actualizo el stock de la variante de Shopify
                 for shopify_variant in shopify_variantes:
                     logger.info(f"Processing variant {shopify_variant['id']} from Shopify")
-                    if shopify_variant["sku"] == str(tiendanube_variant["id"]) and shopify_variant["inventory_quantity"] != tiendanube_variant["stock"]:
+                    stock = tiendanube_variant["stock"] if tiendanube_variant["stock"] is not None else 999
+                    if shopify_variant["sku"] == str(tiendanube_variant["id"]) and shopify_variant["inventory_quantity"] != stock:
                         logger.info(f"Updating stock for variant {shopify_variant['id']} from Shopify")
                         url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
                         headers = {
                             "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
                         }
                         data = {
-                            "location_id": 104501772590,  # TODO por ahora esta herdcodeado pero hay que hacer la peticion para obtenerlo
+                            "location_id": TIENDANUBE_STORES[tienda]['deposit'],  # TODO por ahora esta herdcodeado pero hay que hacer la peticion para obtenerlo
                             "inventory_item_id": shopify_variant['inventory_item_id'],
-                            "available": tiendanube_variant["stock"]
+                            "available": stock
                         }
 
                         response = requests.post(url, headers=headers, json=data)
@@ -304,7 +306,7 @@ def sync_products():
             logger.info("#" * 50)
             logger.info(f"Fetching products from {TIENDANUBE_STORES[tienda]['name']}")
 
-            updated_at_min = (datetime.now() - timedelta(days=1)).isoformat()
+            updated_at_min = (datetime.now() - timedelta(hours=6)).isoformat()
 
             # Obtengo los productos de Tiendanube
             products = []
@@ -324,8 +326,10 @@ def sync_products():
                     "published": "true",
                     "min_stock": 1,
                     "sort_by": "created-at-descending",
-                    # "updated_at_min": updated_at_min  # Se puede agregar luego si es necesario
                 }
+
+                if not products_quantity:
+                    params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
                 response = requests.get(url, headers=headers, params=params)
@@ -333,7 +337,6 @@ def sync_products():
                 if response.status_code != 200:
                     logger.error(f"Error fetching products (page {page}) from Tiendanube: {response.status_code} - {response.text}")
                     break
-
 
                 current_products = response.json()
                 if not current_products:
@@ -354,6 +357,23 @@ def sync_products():
                     break
 
                 page += 1
+
+            if products_quantity:
+                filtered_data = []
+
+                for product in products:
+                    if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+                        filtered_data.append(product)
+                        continue
+
+                    for variant in product.get('variants', []):
+                        if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
+                            filtered_data.append(product)
+                            break
+
+                products = filtered_data
+
+            logger.info(f"Total products to update: {len(products)}")
 
             for product in products:
 
@@ -417,6 +437,7 @@ def sync_products():
 
                 existing_tags.add(tienda)
                 existing_tags.add(TIENDANUBE_STORES[tienda]['category'])
+                existing_tags.add(TIENDANUBE_STORES[tienda].get('category_2', ''))
 
                 # Convertilo de nuevo a lista si necesitás
                 tiendanube_tags = list(existing_tags)
@@ -438,7 +459,7 @@ def sync_products():
                 response = requests.get(url, headers=headers, params=params, verify=certifi.where())
                 if response.status_code == 200:
                     shopify_product = response.json().get("products", [])[0] if response.json().get("products", []) else []
-                    logger.info(f"Fetched {len(shopify_product)} products from Shopify")
+                    logger.info(f"Fetched {1 if shopify_product else 0} product from Shopify")
                 else:
                     logger.error(f"Error fetching products from Shopify: {response.status_code} - {response.text}")
                     continue
@@ -482,7 +503,7 @@ def sync_products():
                         logger.info(f"Product {product['id']} updated successfully in Shopify")
                     else:
                         logger.error(f"Error updating product: {response.status_code} - {response.text}")
-                    logger.info(f"Product {product['id']} processed successfully")
+
                 else:
                     # Si el producto no existe, lo creo
                     logger.info(f"Creating product {product['id']} in Shopify")
@@ -511,15 +532,68 @@ def sync_products():
                         logger.info(f"Product {product['id']} created successfully in Shopify")
                     else:
                         logger.error(f"Error creating product: {response.status_code} - {response.text}")
+
                 # Si el producto se crea correctamente, actualizo las imagenes
                 if response.status_code in [200, 201]:
-
                     shopify_product = response.json().get("product", [])
+                    shopify_product_variants = shopify_product.get("variants", [])
 
-                # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
-                shopify_variant_map = {}
-                for variant in shopify_product.get("variants", []):
-                    shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
+                    # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
+                    shopify_variant_map = {}
+                    for variant in shopify_product_variants:
+                        # shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
+                        sku = str(variant.get("sku"))
+                        shopify_variant_map[sku] = variant.get("id")
+
+                        inventory_item_id = variant.get("inventory_item_id")
+                        if not inventory_item_id:
+                            continue  # Evitar errores si no viene
+
+                        # Buscar el stock correspondiente a este SKU
+                        tiendanube_stock_variant = next(
+                            (v for v in product.get("variants", []) if str(v["id"]) == sku),
+                            None
+                        )
+                        if not tiendanube_stock_variant:
+                            continue
+
+                        stock = tiendanube_stock_variant.get("stock") or 999
+                        if variant.get("inventory_quantity") == stock and TIENDANUBE_STORES[tienda]['deposit'] == DEFAULT_DEPOSIT:
+                            logger.info(f"Stock for variant {variant['id']} is already up to date in Shopify")
+                            continue
+
+                        url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
+                        headers = {
+                            "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                        }
+                        data = {
+                            "location_id": TIENDANUBE_STORES[tienda]['deposit'],
+                            "inventory_item_id": variant['inventory_item_id'],
+                            "available": stock
+                        }
+                        time.sleep(1)  # Evitar rate limit de Shopify
+                        response = requests.post(url, headers=headers, json=data)
+                        if response.status_code == 200:
+                            logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
+                        else:
+                            logger.error(f"Error updating stock: {response.status_code} - {response.text}")
+
+                        if TIENDANUBE_STORES[tienda]['deposit'] != DEFAULT_DEPOSIT:
+                            url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
+                            headers = {
+                                "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
+                            }
+                            data = {
+                                "location_id": DEFAULT_DEPOSIT,
+                                "inventory_item_id": variant['inventory_item_id'],
+                                "available": 0
+                            }
+                            time.sleep(1)  # Evitar rate limit de Shopify
+                            response = requests.post(url, headers=headers, json=data)
+                            if response.status_code == 200:
+                                logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
+                            else:
+                                logger.error(f"Error updating stock: {response.status_code} - {response.text}")
 
                 logger.info(f"Updating images for product {product['id']} in Shopify")
 
@@ -577,7 +651,6 @@ def sync_products():
                         print(f"Image {result['image_alt']} -> Status: {result['status']}")
                         if result["status"] != 200:
                             print(f"❌ Error: {result['response']}")
-
 
                 logger.info(f"Product {product['id']} processed successfully")
 
@@ -699,7 +772,7 @@ def create_smart_collections():
 
 
 def collection_and_products():
-    create_smart_collections()
+    # create_smart_collections()
     sync_products()
 
 
