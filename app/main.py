@@ -184,6 +184,7 @@ def sync(body: dict):
 
 
 def sync_stock():
+    start_time = time.time()
     logger.info("==========> Synchronizing stock... <==========")
     try:
         # Obtengo los productos de Tiendanube
@@ -269,7 +270,9 @@ def sync_stock():
 
     except Exception as e:
         logger.exception("Error occurred during stock synchronization, Error: %s", str(e))
-        return {"error": "An error occurred during stock synchronization"}
+
+    end_time = time.time()
+    logger.info(f"Stock was updated in {calculate_execution_time(start_time, end_time)}")
 
 
 def calculate_price(price, promotional_price):
@@ -658,13 +661,18 @@ def sync_products():
         logger.exception("Error occurred during product synchronization, Error: %s", str(e))
 
     end_time = time.time()
-    duracion = end_time - start_time
 
-    horas = int(duracion // 3600)
-    minutos = int((duracion % 3600) // 60)
-    segundos = duracion % 60
+    logger.info(f"Products were created/updated in {calculate_execution_time(start_time, end_time)}")
 
-    logger.info(f"Tiendanube ID {tienda} products were created/updated in {horas}h {minutos}m {segundos:.2f}s")
+
+def calculate_execution_time(start_time, end_time):
+    duration = end_time - start_time
+
+    hours = int(duration // 3600)
+    minutes = int((duration % 3600) // 60)
+    seconds = duration % 60
+
+    return f"{hours}h {minutes}m {seconds:.2f}s"
 
 
 def preparar_imagen_por_src(img):
