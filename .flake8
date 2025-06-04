@@ -1,0 +1,22 @@
+[flake8]
+# Longitud máxima por línea
+max-line-length = 100
+
+# Ignorar carpetas comunes y las de tu proyecto
+exclude = 
+    .git,
+    __pycache__,
+    venv,
+    logs,
+    migrations
+
+# Ignorar ciertos errores:
+# E501: líneas largas (ya lo controlamos con max-line-length)
+ignore = 
+    E501
+
+# Mostrar el número de línea y columna
+show-source = true
+
+# Aplicar reglas solo a estos tipos de archivo
+filename = *.py

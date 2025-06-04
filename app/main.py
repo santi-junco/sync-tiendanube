@@ -1,9 +1,6 @@
 import time
 import os
 import json
-import logging
-import requests
-import certifi
 import html
 
 from bs4 import BeautifulSoup
@@ -14,6 +11,10 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from app.logger import logger
+from app.Shopify import Shopify
+from app.Tiendanube import Tiendanube
+from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price
 
 # Cargar variables de entorno desde el archivo .env
 env_path = Path(__file__).resolve().parent.parent / '.env'
@@ -22,58 +23,14 @@ load_dotenv(env_path, encoding="utf-8")
 tiendas_raw = os.getenv("TIENDAS")
 TIENDANUBE_STORES = json.loads(tiendas_raw)
 
-# Configuración de Shopify
-SHOPIFY_STORE_URL = os.getenv("SHOPIFY_STORE_URL")
-SHOPIFY_ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
-SHOPIFY_API_VERSION = os.getenv("SHOPIFY_API_VERSION")
-SHOPIFY_API_URL = f"{SHOPIFY_STORE_URL}/admin/api/{SHOPIFY_API_VERSION}"
-STOP_WORDS = {"y", "de", "la", "el", "los", "las", "para", "a", "en"}
-DEFAULT_DEPOSIT = "104501772590"
-
-# Crear directorio si no existe
-os.makedirs("logs", exist_ok=True)
-
-# Función para limpiar logs viejos
-def eliminar_logs_viejos(directorio="logs", dias=5):
-    hoy = datetime.now()
-    for filename in os.listdir(directorio):
-        if filename.endswith(".log"):
-            try:
-                fecha_str = filename.replace(".log", "")
-                fecha_archivo = datetime.strptime(fecha_str, "%Y%m%d")
-                if hoy - fecha_archivo > timedelta(days=dias):
-                    os.remove(os.path.join(directorio, filename))
-            except ValueError:
-                # Ignorar archivos que no cumplan con el formato
-                pass
-
-# Ejecutar limpieza
-eliminar_logs_viejos()
-
-# Crear archivo de log para hoy
-fecha_log = datetime.now().strftime("%Y%m%d")
-log_filename = f"logs/{fecha_log}.log"
-
-# Logger
-logger = logging.getLogger("my_logger")
-logger.setLevel(logging.INFO)
-
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-
-file_handler = logging.FileHandler(log_filename)
-file_handler.setFormatter(formatter)
-
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(formatter)
-
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-logger.propagate = False
 
 app = FastAPI()
 
 # Scheduler
 scheduler = BackgroundScheduler()
+tiendanube = Tiendanube()
+shopify = Shopify()
+
 
 @app.get("/")
 def root():
@@ -87,7 +44,7 @@ def root():
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
-        logger.exception("Error occurred at root endpoint")
+        logger.exception(f"Error occurred at root endpoint: {e}")
         return {"error": "An error occurred"}
 
 
@@ -118,39 +75,20 @@ def sync(body: dict):
                 # return {"error": "Vendor not found in the product"}
 
             logger.info(f"Obtaining product {product['product_id']} from Shopify")
-            response = requests.get(
-                url=f"{SHOPIFY_API_URL}/products/{product['product_id']}.json",
-                headers={
-                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                },
-                params={
-                    "fields": "handle",
-                }
-            )
-            if response.status_code == 200:
-                response_data = response.json()
-                pedido['product_id'] = response_data['product']['handle']
-            else:
-                logger.error(f"Error fetching product data: {response.status_code} - {response.text}")
-                return {"error": "Error fetching product data"}
+            params = {
+                "fields": "handle",
+            }
+            response = shopify.get_product(product['product_id'], params=params)
+            if response:
+                pedido['product_id'] = response['product']['handle']
 
             logger.info(f"Obtaining variant {product['variant_id']} from Shopify")
-            response = requests.get(
-                url=f"{SHOPIFY_API_URL}/variants/{product['variant_id']}.json",
-                headers={
-                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                },
-                params={
-                    "fields": "sku"
-                }
-            )
-
-            if response.status_code == 200:
-                response_data = response.json()
-                pedido['variant_id'] = response_data['variant']['sku']
-            else:
-                logger.error(f"Error fetching variant data: {response.status_code} - {response.text}")
-                return {"error": "Error fetching variant data"}
+            params = {
+                "fields": "sku"
+            }
+            response = shopify.get_product_variants(product['variant_id'], params=params)
+            if response:
+                pedido['variant_id'] = response['variants'][0]['sku']
 
             pedidos.append(pedido)
             logger.info(f"Product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} added to the list")
@@ -161,25 +99,21 @@ def sync(body: dict):
             url = f"{TIENDANUBE_STORES[str(pedido['vendor'])]['url']}/products/{pedido['product_id']}/variants/stock"
             headers = TIENDANUBE_STORES[str(pedido['vendor'])]['headers']
             data = {
-                "action" : "variation",
-                "value" : pedido['quantity'] * -1,
-                "id" : pedido['variant_id']
+                "action": "variation",
+                "value": pedido['quantity'] * -1,
+                "id": pedido['variant_id']
             }
 
             logger.info(f"Sending request to {url} with data {data}")
-            response = requests.post(url, headers=headers, json=data)
-            if response.status_code != 200:
-                logger.error(f"Error updating stock: {response.status_code} - {response.text}")
-                return {"error": "Error updating stock"}
-            else:
-                logger.info(f"Stock updated successfully for product {pedido['product_id']} with variant {pedido['variant_id']} and quantity {pedido['quantity']} from vendor {pedido['vendor']}")
+            # TODO ver de mejorar el mensaje dentro de la funcion de tiendanube o despues de la funcion
+            response = tiendanube.update_stock(url, headers, data)
 
         logger.info("Stock updated successfully for all products in the order")
         logger.info("Synchronization completed successfully")
 
         return {"message": "Sincronización exitosa"}
     except Exception as e:
-        logger.exception("Error occurred during synchronization")
+        logger.exception(f"Error occurred during synchronization: {e}")
         return {"error": "An error occurred during synchronization"}
 
 
@@ -191,7 +125,7 @@ def sync_stock():
         updated_at_min = (datetime.now() - timedelta(minutes=15)).isoformat()
         for tienda in TIENDANUBE_STORES:
             logger.info("#" * 50)
-            logger.info(f"Fetching products from Tiendanube ID {tienda}")
+            logger.info(f"Fetching products from {TIENDANUBE_STORES[tienda]['name']}")
 
             # Obtengo todas las variatnes de los productos de Tiendanube que fueron actualizadas en los ultimos 15 minutos
             products_variants = []
@@ -204,12 +138,7 @@ def sync_stock():
                 "fields": "variants",
                 "updated_at_min": updated_at_min
             }
-            response = requests.get(url, headers=headers, params=params)
-            if response.status_code == 200:
-                products_variants = response.json()
-                logger.info(f"Fetched {len(products_variants)} products from Tiendanube")
-            else:
-                logger.error(f"Error fetching variants from Tiendanube: {response.status_code} - {response.text}")
+            products_variants = tiendanube.get_products(url, headers, params)
 
             # Obtengo solamente las variantes que fueron actualizadas en los ultimos 15 minutos
             tiendanube_variantes = []
@@ -223,22 +152,12 @@ def sync_stock():
             # Obtengo las variantes del producto de Shopify por el handle que es el id del producto en Tiendanube
             for tiendanube_variant in tiendanube_variantes:
                 logger.info(f"Getting product with handle {tiendanube_variant['product_id']} from Shopify")
-                url = f"{SHOPIFY_API_URL}/products.json"
-                headers = {
-                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                }
                 params = {
                     "fields": "variants",
                     "handle": tiendanube_variant["product_id"]
                 }
 
-                response = requests.get(url, headers=headers, params=params)
-                if response.status_code == 200:
-                    response_data = response.json()
-                    logger.info(f"Fetched {len(response_data)} products from Shopify")
-                else:
-                    logger.error(f"Error fetching products from Shopify: {response.status_code} - {response.text}")
-                    continue
+                response_data = shopify.get_products(params)
 
                 # Formateo la respuesta para obtener solamente una lista de variantes
                 shopify_variantes = []
@@ -252,53 +171,18 @@ def sync_stock():
                     stock = tiendanube_variant["stock"] if tiendanube_variant["stock"] is not None else 999
                     if shopify_variant["sku"] == str(tiendanube_variant["id"]) and shopify_variant["inventory_quantity"] != stock:
                         logger.info(f"Updating stock for variant {shopify_variant['id']} from Shopify")
-                        url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
-                        headers = {
-                            "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                        }
                         data = {
-                            "location_id": TIENDANUBE_STORES[tienda]['deposit'],  # TODO por ahora esta herdcodeado pero hay que hacer la peticion para obtenerlo
+                            "location_id": TIENDANUBE_STORES[tienda]['deposit'],
                             "inventory_item_id": shopify_variant['inventory_item_id'],
                             "available": stock
                         }
-
-                        response = requests.post(url, headers=headers, json=data)
-                        if response.status_code == 200:
-                            logger.info(f"Stock updated successfully for variant {shopify_variant['id']} from Shopify")
-                        else:
-                            logger.error(f"Error updating stock: {response.status_code} - {response.text}")
+                        shopify.set_inventory_level(data)
 
     except Exception as e:
         logger.exception("Error occurred during stock synchronization, Error: %s", str(e))
 
     end_time = time.time()
     logger.info(f"Stock was updated in {calculate_execution_time(start_time, end_time)}")
-
-
-def calculate_price(price, promotional_price):
-    precio = promotional_price if promotional_price else price
-    # TODO va a ser mejor recibir este dict por params, pero cuando tenga definido para cada tienda
-    RANGOS_PRECIO = [
-        (0.00,     9000.00,   1.35),
-        (9000.00,  10000.00,  1.28),
-        (20000.00, 30000.00,  1.23),
-        (30000.00, 40000.00,  1.19),
-        (40000.00, 50000.00,  1.16),
-        (50000.00, 60000.00,  1.14),
-        (60000.00, 90000.00,  1.12),
-        (100000.00, 199000.01, 1.1),
-    ]
-
-    try:
-        precio = float(precio)
-    except ValueError:
-        logger.error(f"Invalid price format: {precio}")
-
-    for inicio, fin, procentaje in RANGOS_PRECIO:
-        if inicio <= precio < fin:
-            return precio * procentaje
-
-    return precio
 
 
 def sync_products():
@@ -335,20 +219,12 @@ def sync_products():
                     params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
-                response = requests.get(url, headers=headers, params=params)
-
-                if response.status_code != 200:
-                    logger.error(f"Error fetching products (page {page}) from Tiendanube: {response.status_code} - {response.text}")
-                    break
-
-                current_products = response.json()
+                current_products = tiendanube.get_products(url, headers, params)
                 if not current_products:
                     break
 
                 products.extend(current_products)
                 fetched += len(current_products)
-
-                logger.info(f"Fetched {len(current_products)} products on page {page} (Total: {fetched})")
 
                 # Si se especificó un límite y lo alcanzamos, cortamos
                 if products_quantity and fetched >= products_quantity:
@@ -451,21 +327,11 @@ def sync_products():
                 logger.info(f"Searching for product {product['id']} in Shopify")
                 time.sleep(1)
                 shopify_product = None
-                url = f"{SHOPIFY_API_URL}/products.json"
-                headers = {
-                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                }
                 params = {
                     "handle": product["id"]
                 }
-
-                response = requests.get(url, headers=headers, params=params, verify=certifi.where())
-                if response.status_code == 200:
-                    shopify_product = response.json().get("products", [])[0] if response.json().get("products", []) else []
-                    logger.info(f"Fetched {1 if shopify_product else 0} product from Shopify")
-                else:
-                    logger.error(f"Error fetching products from Shopify: {response.status_code} - {response.text}")
-                    continue
+                shopify_product = shopify.get_products(params)
+                shopify_product = shopify_product.get("products", [])[0] if shopify_product.get("products", []) else []
 
                 # formateo los atributos = options
                 tiendanube_attributes = [{"name": attr.get("es")} for attr in product.get("attributes", [])]
@@ -482,10 +348,6 @@ def sync_products():
                 if shopify_product:
                     # Si el producto existe, lo actualizo
                     logger.info(f"Updating product {product['id']} in Shopify")
-                    url = f"{SHOPIFY_API_URL}/products/{shopify_product['id']}.json"
-                    headers = {
-                        "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                    }
                     data = {
                         "product": {
                             "id": shopify_product['id'],
@@ -501,19 +363,10 @@ def sync_products():
                         }
                     }
 
-                    response = requests.put(url, headers=headers, json=data)
-                    if response.status_code == 200:
-                        logger.info(f"Product {product['id']} updated successfully in Shopify")
-                    else:
-                        logger.error(f"Error updating product: {response.status_code} - {response.text}")
+                    response = shopify.update_product(shopify_product['id'], data)
 
                 else:
                     # Si el producto no existe, lo creo
-                    logger.info(f"Creating product {product['id']} in Shopify")
-                    url = f"{SHOPIFY_API_URL}/products.json"
-                    headers = {
-                        "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                    }
                     data = {
                         "product": {
                             "title": product["name"]["es"],
@@ -529,16 +382,11 @@ def sync_products():
                         }
                     }
 
-                    response = requests.post(url, headers=headers, json=data)
-
-                    if response.status_code == 201:
-                        logger.info(f"Product {product['id']} created successfully in Shopify")
-                    else:
-                        logger.error(f"Error creating product: {response.status_code} - {response.text}")
+                    response = shopify.create_product(data)
 
                 # Si el producto se crea correctamente, actualizo las imagenes
-                if response.status_code in [200, 201]:
-                    shopify_product = response.json().get("product", [])
+                if response:
+                    shopify_product = response.get("product", [])
                     shopify_product_variants = shopify_product.get("variants", [])
 
                     # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
@@ -561,78 +409,39 @@ def sync_products():
                             continue
 
                         stock = tiendanube_stock_variant.get("stock") or 999
-                        if variant.get("inventory_quantity") == stock and TIENDANUBE_STORES[tienda]['deposit'] == DEFAULT_DEPOSIT:
+                        if variant.get("inventory_quantity") == stock and TIENDANUBE_STORES[tienda]['deposit'] == shopify.DEFAULT_DEPOSIT:
                             logger.info(f"Stock for variant {variant['id']} is already up to date in Shopify")
                             continue
 
-                        url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
-                        headers = {
-                            "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                        }
                         data = {
                             "location_id": TIENDANUBE_STORES[tienda]['deposit'],
                             "inventory_item_id": variant['inventory_item_id'],
                             "available": stock
                         }
                         time.sleep(1)  # Evitar rate limit de Shopify
-                        response = requests.post(url, headers=headers, json=data)
-                        if response.status_code == 200:
+                        response = shopify.set_inventory_level(data)
+                        if response:
                             logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
-                        else:
-                            logger.error(f"Error updating stock: {response.status_code} - {response.text}")
 
-                        if TIENDANUBE_STORES[tienda]['deposit'] != DEFAULT_DEPOSIT:
-                            url = f"{SHOPIFY_API_URL}/inventory_levels/set.json"
-                            headers = {
-                                "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                            }
-                            data = {
-                                "location_id": DEFAULT_DEPOSIT,
-                                "inventory_item_id": variant['inventory_item_id'],
-                                "available": 0
-                            }
-                            time.sleep(1)  # Evitar rate limit de Shopify
-                            response = requests.post(url, headers=headers, json=data)
-                            if response.status_code == 200:
+                        if TIENDANUBE_STORES[tienda]['deposit'] != shopify.DEFAULT_DEPOSIT:
+                            response = shopify.set_default_inventory_level(variant['inventory_item_id'])
+                            if response:
                                 logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
-                            else:
-                                logger.error(f"Error updating stock: {response.status_code} - {response.text}")
 
                 logger.info(f"Updating images for product {product['id']} in Shopify")
 
                 prod_img_shopify = set()
-                url = f"{SHOPIFY_API_URL}/products/{shopify_product['id']}/images.json"
-                headers = {
-                    "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-                }
+                response = shopify.get_product_images(shopify_product['id'])
+                if response:
+                    prod_img_shopify = {str(img.get("alt")) for img in response.get("images", [])}
 
-                response = requests.get(url, headers=headers)
-                if response.status_code == 200:
-                    prod_img_shopify = {str(img.get("alt")) for img in response.json().get("images", [])}
-
-                logger.info(f"Fetched {len(prod_img_shopify)} images from Shopify's product ID {shopify_product['id']}")
+                # logger.info(f"Fetched {len(prod_img_shopify)} images from Shopify's product ID {shopify_product['id']}")
 
                 images_to_upload = [
                     img for img in tiendanube_images
                     if str(img.get("alt")) not in prod_img_shopify
                 ]
                 logger.info(f"{len(images_to_upload)} images to load to Shopify")
-
-                def upload_image_to_shopify(image, variant_ids, shopify_url, headers):
-                    data = {
-                        "image": {
-                            **image
-                        }
-                    }
-                    if variant_ids:
-                        data["image"]["variant_ids"] = variant_ids
-
-                    response = requests.post(shopify_url, json=data, headers=headers)
-                    return {
-                        "status": response.status_code,
-                        "response": response.json(),
-                        "image_alt": image.get("alt")
-                    }
 
                 futures = []
                 with ThreadPoolExecutor(max_workers=2) as executor:
@@ -646,7 +455,8 @@ def sync_products():
                         ]
 
                         futures.append(
-                            executor.submit(upload_image_to_shopify, image, variant_ids, url, headers)
+                            # executor.submit(upload_image_to_shopify, image, variant_ids, url, headers)
+                            executor.submit(shopify.upload_image_to_shopify, image, shopify_product['id'], variant_ids)
                         )
 
                     for future in as_completed(futures):
@@ -665,58 +475,17 @@ def sync_products():
     logger.info(f"Products were created/updated in {calculate_execution_time(start_time, end_time)}")
 
 
-def calculate_execution_time(start_time, end_time):
-    duration = end_time - start_time
-
-    hours = int(duration // 3600)
-    minutes = int((duration % 3600) // 60)
-    seconds = duration % 60
-
-    return f"{hours}h {minutes}m {seconds:.2f}s"
-
-
-def preparar_imagen_por_src(img):
-    try:
-        return {
-            "src": img['src'],
-            "alt": img.get("id", ""),
-            "position": img.get("position", 1)
-        }
-    except Exception as e:
-        logger.error(f"Error procesando imagen {img.get('src', '')}: {e}")
-        return None
-
-
-def build_full_handle(category_gral, category, category_by_id):
-    handles = []
-    current = category
-    while current:
-        handles.insert(0, current["handle"]["es"])  # prepend
-        parent_id = current["parent"]
-        current = category_by_id.get(parent_id) if parent_id else None
-    handles.insert(0, category_gral)
-    return ",".join(handles)
-
-
 def create_smart_collections():
     logger.info("==========> Creating smart collections... <==========")
     logger.info("Fetching categories from Tiendanube")
 
-    # Obtengo las colecciones de Shopify
-    url = f"{SHOPIFY_API_URL}/smart_collections.json"
-    headers = {
-        "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-    }
     params = {
         "fields": "handle",
         "limit": 250
     }
-    response = requests.get(url, headers=headers, params=params)
-    if response.status_code == 200:
-        categories = response.json().get("smart_collections", [])
-        logger.info(f"Fetched {len(categories)} categories from Shopify")
-    else:
-        logger.error(f"Error fetching categories from Shopify: {response.status_code} - {response.text}")
+    response = shopify.get_smart_collections(params)
+    if response:
+        categories = response.get("smart_collections", [])
 
     shopify_collections = [category["handle"] for category in categories]
 
@@ -730,12 +499,7 @@ def create_smart_collections():
         params = {
             "per_page": 200,
         }
-        response = requests.get(url, headers=headers, params=params)        
-        if response.status_code == 200:
-            categories = response.json()
-            logger.info(f"Fetched {len(categories)} categories from Tiendanube")
-        else:
-            logger.error(f"Error fetching categories from Tiendanube: {response.status_code} - {response.text}")
+        categories = tiendanube.get_categories(url, headers, params)
 
         category_by_id = {cat["id"]: cat for cat in categories}
 
@@ -766,17 +530,7 @@ def create_smart_collections():
                 }
             }
 
-            url = f"{SHOPIFY_API_URL}/smart_collections.json"
-            headers = {
-                "X-Shopify-Access-Token": f"{SHOPIFY_ACCESS_TOKEN}",
-            }
-
-            response = requests.post(url=url, headers=headers, json=smart_collections_full_hierarchy)
-
-            if response.status_code == 201:
-                logger.info(f"Smart collection {name} created successfully")
-            else:
-                logger.error(f"Error creating smart collection {name}: {response.status_code} - {response.text} - {smart_collections_full_hierarchy}")
+            shopify.create_smart_collection(smart_collections_full_hierarchy)
 
 
 def collection_and_products():
@@ -787,7 +541,7 @@ def collection_and_products():
 @app.on_event("startup")
 def start_scheduler():
     logger.info("Starting scheduler")
-    scheduler.add_job(sync_stock, 'interval', minutes=15)
+    scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
     scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
     scheduler.start()
 
