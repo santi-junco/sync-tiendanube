@@ -63,9 +63,9 @@ class Shopify():
                 "inventory_item_id": inventory_item_id,
                 "available": 0
             }
-        response = requests.post(f"{self.SHOPIFY_API_URL}/inventory_levels/set_default.json", headers=self.SHOPIFY_HEADERS, json=data)
+        response = requests.post(f"{self.SHOPIFY_API_URL}/inventory_levels/set.json", headers=self.SHOPIFY_HEADERS, json=data)
         if response.status_code != 200:
-            logger.error(f"Error setting default inventory level in Shopify: {response.status_code} - {response.text}")
+            logger.error(f"Error setting default inventory level in Shopify: {response.status_code} - {response.text} - {response.content}")
             return {}
         logger.info("Set default inventory level in Shopify")
         return response.json()
