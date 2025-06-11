@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.logger import logger
 from app.Shopify import Shopify
 from app.Tiendanube import Tiendanube
-from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price
+from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price, create_tags
 
 # Cargar variables de entorno desde el archivo .env
 env_path = Path(__file__).resolve().parent.parent / '.env'
@@ -147,8 +147,8 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                if not products_quantity:
-                    params["updated_at_min"] = updated_at_min
+                # if not products_quantity:
+                #     params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
                 current_products = tiendanube.get_products(url, headers, params)
@@ -181,17 +181,17 @@ def sync_products():
                 for product in products_to_eliminate:
                     shopify.delete_product(product.get("id"))
 
-                for product in products:
-                    if product.get('updated_at') and product['updated_at'] >= updated_at_min:
-                        filtered_data.append(product)
-                        continue
+                # for product in products:
+                #     if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+                #         filtered_data.append(product)
+                #         continue
 
-                    for variant in product.get('variants', []):
-                        if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
-                            filtered_data.append(product)
-                            break
+                #     for variant in product.get('variants', []):
+                #         if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
+                #             filtered_data.append(product)
+                #             break
 
-                products = filtered_data
+                # products = filtered_data
 
             logger.info(f"Total products to update: {len(products)}")
 
@@ -251,7 +251,10 @@ def sync_products():
 
                 # Agregá las categorías si no están ya
                 for handle_category in product.get("categories", []):
-                    tag_name = handle_category["handle"]["es"].strip()
+                    tag_handle = handle_category["handle"]["es"].strip()
+                    tag_name = handle_category["name"]["es"].strip()
+                    if tag_handle not in existing_tags:
+                        existing_tags.add(tag_handle)
                     if tag_name not in existing_tags:
                         existing_tags.add(tag_name)
 
@@ -260,7 +263,8 @@ def sync_products():
                 existing_tags.add(TIENDANUBE_STORES[tienda].get('category_2', ''))
 
                 # Convertilo de nuevo a lista si necesitás
-                tiendanube_tags = list(existing_tags)
+                tiendanube_tags = []
+                tiendanube_tags = create_tags(existing_tags)
 
                 logger.info(f"Tags for product {product['id']}: {tiendanube_tags}")
 
@@ -474,8 +478,82 @@ def create_smart_collections():
             shopify.create_smart_collection(smart_collections_full_hierarchy)
 
 
+categories_to_create = [
+    ("indumentaria", "hombre", ["pantalon", "remera"]),
+    ("indumentaria", "mujer", ["pantalon", "remera"]),
+    ("indumentaria", "nino", ["pantalon", "remera"]),
+]
+
+
+def create_collections(categories_to_create):
+    # Obtengo las collections que ya estan creadas
+    params = {
+        "fields": "handle",
+        "limit": 250
+    }
+    response = shopify.get_smart_collections(params)
+    if response:
+        shopify_collections = response.get("smart_collections", [])
+    shopify_collections = [collection["handle"] for collection in shopify_collections]
+
+    for cat_general, second_level, specifics in categories_to_create:
+        if cat_general in shopify_collections:
+            logger.info(f"Collection {cat_general} already exists in Shopify")
+        else:
+            # Nivel 1: solo categoría general
+            collections = {
+                "smart_collection": {
+                    "title": cat_general,
+                    "handle": cat_general,
+                    "rules": [{"column": "tag", "relation": "equals", "condition": cat_general}],
+                    "published": True
+                }
+            }
+            time.sleep(0.35)
+            shopify.create_smart_collection(collections)
+
+        if f"{cat_general}-{second_level}" in shopify_collections:
+            logger.info(f"Collection {cat_general}-{second_level} already exists in Shopify")
+        else:
+            # Nivel 2: general + segundo nivel
+            collections = {
+                "smart_collection": {
+                    "title": f"{second_level}",
+                    "handle": f"{cat_general}-{second_level}",
+                    "rules": [
+                        {"column": "tag", "relation": "equals", "condition": cat_general},
+                        {"column": "tag", "relation": "equals", "condition": second_level}
+                    ],
+                    "published": True
+                }
+            }
+            time.sleep(0.35)
+            shopify.create_smart_collection(collections)
+
+        # Nivel 3: + específica
+        for specific in specifics:
+            if f"{cat_general}-{second_level}-{specific}" in shopify_collections:
+                logger.info(f"Collection {cat_general}-{second_level}-{specific} already exists in Shopify")
+            else:
+
+                collections = {
+                    "smart_collection": {
+                        "title": f"{specific}",
+                        "handle": f"{cat_general}-{second_level}-{specific}",
+                        "rules": [
+                            {"column": "tag", "relation": "equals", "condition": cat_general},
+                            {"column": "tag", "relation": "equals", "condition": second_level},
+                            {"column": "tag", "relation": "equals", "condition": specific}
+                        ],
+                        "published": True
+                    }
+                }
+                time.sleep(0.35)
+                shopify.create_smart_collection(collections)
+
+
 def collection_and_products():
-    # create_smart_collections()
+    # create_collections(categories_to_create)
     sync_products()
 
 
@@ -506,13 +584,14 @@ def sync_stock():
 
 @app.on_event("startup")
 def start_scheduler():
-    logger.info("Starting scheduler")
-    scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
-    scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
-    scheduler.start()
+    collection_and_products()
+    # logger.info("Starting scheduler")
+    # scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
+    # scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
+    # scheduler.start()
 
 
-@app.on_event("shutdown")
-def shutdown_scheduler():
-    logger.info("Shutting down scheduler")
-    scheduler.shutdown()
+# @app.on_event("shutdown")
+# def shutdown_scheduler():
+#     logger.info("Shutting down scheduler")
+#     scheduler.shutdown()

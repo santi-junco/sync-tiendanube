@@ -12,6 +12,46 @@ RANGOS_PRECIO = [
 ]
 
 
+TAGS_EQUIVALENCIA = {
+    "indumentaria": {
+        # pantalones
+        "pantalon": "pantalon", 
+        "pantalones": "pantalon",
+        "short": "pantalon", 
+        "shorts": "pantalon", 
+        "bermuda": "pantalon", 
+        "bermudas": "pantalon",
+
+        # remeras
+        "remera": "remera", 
+        "remeras": "remera", 
+        "chomba": "remera", 
+        "camiseta": "remera",
+        "camisetas": "remera",
+
+        # camisas
+        "camisa": "camisa",
+        "camisas": "camisa",
+
+        # abrigo
+        "abrigos": "abrigo",
+        "abrigo": "abrigo",
+        "camperita": "abrigo",
+        "camperitas": "abrigo",
+    }
+}
+
+PUBLICOS_EQUIVALENCIA = {
+    "hombre": "hombre",
+    "mujer": "mujer",
+    "niño": "nino",
+    "niña": "nino",
+    "niño/a": "nino",
+    "bebe": "nino",
+    "bebe/a": "nino",
+    "bebes": "nino",
+}
+
 def calculate_execution_time(start_time, end_time):
     duration = end_time - start_time
 
@@ -61,3 +101,23 @@ def calculate_price(price, promotional_price, rango_precio=None):
             return precio * procentaje
 
     return precio
+
+def create_tags(datos):
+    datos_lower = {item.lower() for item in datos if isinstance(item, str)}
+
+    tienda_id = next((item for item in datos_lower if item.isdigit() and len(item) == 6), None)
+
+    publico_objetivo = next((PUBLICOS_EQUIVALENCIA[item] for item in datos_lower if item in PUBLICOS_EQUIVALENCIA), None)
+
+    categorias_generales = {"indumentaria", "perfumeria", "tecnologia", "electronica", "bazar"}
+    categoria_general = next((item for item in datos_lower if item in categorias_generales), None)
+
+    categoria_especifica = None
+    if categoria_general in TAGS_EQUIVALENCIA:
+        for item in datos_lower:
+            if item in TAGS_EQUIVALENCIA[categoria_general]:
+                categoria_especifica = TAGS_EQUIVALENCIA[categoria_general][item]
+                break
+
+    return [categoria_especifica, tienda_id, publico_objetivo, categoria_general]
+
