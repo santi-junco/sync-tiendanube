@@ -1,4 +1,5 @@
 import requests
+from datetime import datetime
 
 from app.logger import logger
 
@@ -28,3 +29,25 @@ class Tiendanube():
             return []
         logger.info(f"Fetched {len(response.json())} categories from Tiendanube")
         return response.json()
+
+    def fetch_recent_variants(self, tienda_config, updated_at_min):
+        url = f"{tienda_config['url']}/products"
+        headers = tienda_config['headers']
+        params = {
+            "per_page": 200,
+            "published": "true",
+            "min_stock": 1,
+            "fields": "variants",
+            "updated_at_min": updated_at_min
+        }
+
+        products = self.get_products(url, headers, params)
+        variants = []
+
+        for product in products:
+            for variant in product.get("variants", []):
+                variant_date = datetime.strptime(variant["updated_at"], "%Y-%m-%dT%H:%M:%S%z").isoformat()
+                if variant_date >= updated_at_min:
+                    variants.append(variant)
+
+        return variants

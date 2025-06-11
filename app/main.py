@@ -117,74 +117,6 @@ def sync(body: dict):
         return {"error": "An error occurred during synchronization"}
 
 
-def sync_stock():
-    start_time = time.time()
-    logger.info("==========> Synchronizing stock... <==========")
-    try:
-        # Obtengo los productos de Tiendanube
-        updated_at_min = (datetime.now() - timedelta(minutes=15)).isoformat()
-        for tienda in TIENDANUBE_STORES:
-            logger.info("#" * 50)
-            logger.info(f"Fetching products from {TIENDANUBE_STORES[tienda]['name']}")
-
-            # Obtengo todas las variatnes de los productos de Tiendanube que fueron actualizadas en los ultimos 15 minutos
-            products_variants = []
-            url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
-            headers = TIENDANUBE_STORES[tienda]['headers']
-            params = {
-                "per_page": 200,
-                "published": "true",
-                "min_stock": 1,
-                "fields": "variants",
-                "updated_at_min": updated_at_min
-            }
-            products_variants = tiendanube.get_products(url, headers, params)
-
-            # Obtengo solamente las variantes que fueron actualizadas en los ultimos 15 minutos
-            tiendanube_variantes = []
-            for product_variant in products_variants:
-                for variant in product_variant.get("variants", []):
-                    fecha_variante = datetime.strptime(variant["updated_at"], "%Y-%m-%dT%H:%M:%S%z").isoformat()
-                    if fecha_variante >= updated_at_min:
-                        tiendanube_variantes.append(variant)
-            logger.info(f"Fetched {len(tiendanube_variantes)} filtered variants from Tiendanube")
-
-            # Obtengo las variantes del producto de Shopify por el handle que es el id del producto en Tiendanube
-            for tiendanube_variant in tiendanube_variantes:
-                logger.info(f"Getting product with handle {tiendanube_variant['product_id']} from Shopify")
-                params = {
-                    "fields": "variants",
-                    "handle": tiendanube_variant["product_id"]
-                }
-
-                response_data = shopify.get_products(params)
-
-                # Formateo la respuesta para obtener solamente una lista de variantes
-                shopify_variantes = []
-                for product in response_data.get("products", []):
-                    shopify_variantes.extend(product.get("variants", []))
-
-                # Recorro las variantes de Shopify, comparando el sku de la variante de Shopify con el id de la variante de Tiendanube
-                # y si los stocks son diferentes, actualizo el stock de la variante de Shopify
-                for shopify_variant in shopify_variantes:
-                    logger.info(f"Processing variant {shopify_variant['id']} from Shopify")
-                    stock = tiendanube_variant["stock"] if tiendanube_variant["stock"] is not None else 999
-                    if shopify_variant["sku"] == str(tiendanube_variant["id"]) and shopify_variant["inventory_quantity"] != stock:
-                        logger.info(f"Updating stock for variant {shopify_variant['id']} from Shopify")
-                        data = {
-                            "location_id": TIENDANUBE_STORES[tienda]['deposit'],
-                            "inventory_item_id": shopify_variant['inventory_item_id'],
-                            "available": stock
-                        }
-                        shopify.set_inventory_level(data)
-
-    except Exception as e:
-        logger.exception("Error occurred during stock synchronization, Error: %s", str(e))
-
-    end_time = time.time()
-    logger.info(f"Stock was updated in {calculate_execution_time(start_time, end_time)}")
-
-
 def sync_products():
     start_time = time.time()
     logger.info("==========> Synchronizing products... <==========")
@@ -239,6 +171,15 @@ def sync_products():
 
             if products_quantity:
                 filtered_data = []
+                products_from_shopify = shopify.get_products_by_vendor(tienda).get("products", [])
+                products_to_eliminate = []
+                products_id_from_tiendanube = [str(p.get("id")) for p in products]
+                for product in products_from_shopify:
+                    if product.get("handle") not in products_id_from_tiendanube:
+                        products_to_eliminate.append(product)
+                logger.info(f"Products to eliminate: {len(products_to_eliminate)}")
+                for product in products_to_eliminate:
+                    shopify.delete_product(product.get("id"))
 
                 for product in products:
                     if product.get('updated_at') and product['updated_at'] >= updated_at_min:
@@ -463,7 +404,7 @@ def sync_products():
                         result = future.result()
                         print(f"Image {result['image_alt']} -> Status: {result['status']}")
                         if result["status"] != 200:
-                            print(f"❌ Error: {result['response']}")
+                            print(f"Error: {result['response']}")
 
                 logger.info(f"Product {product['id']} processed successfully")
 
@@ -536,6 +477,31 @@ def create_smart_collections():
 def collection_and_products():
     # create_smart_collections()
     sync_products()
+
+
+def sync_stock():
+    start_time = time.time()
+    logger.info("==========> Synchronizing stock... <==========")
+
+    updated_at_min = (datetime.now() - timedelta(minutes=15)).isoformat()
+
+    for tienda_key, tienda_config in TIENDANUBE_STORES.items():
+        logger.info(f"Fetching products from {tienda_config['name']}")
+
+        tiendanube_variants = tiendanube.fetch_recent_variants(tienda_config, updated_at_min)
+        logger.info(f"Fetched {len(tiendanube_variants)} filtered variants from Tiendanube")
+
+        for tn_variant in tiendanube_variants:
+            handle = tn_variant['product_id']
+            logger.info(f"Getting product with handle {handle} from Shopify")
+
+            shopify_variants = shopify.fetch_shopify_variants_by_handle(handle)
+
+            for sh_variant in shopify_variants:
+                shopify.process_variant_stock_update(tienda_config, tn_variant, sh_variant)
+
+    end_time = time.time()
+    logger.info(f"Stock sync completed in {calculate_execution_time(start_time, end_time)}")
 
 
 @app.on_event("startup")

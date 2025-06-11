@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 
 from app.logger import logger
@@ -117,3 +118,66 @@ class Shopify():
             return {}
         logger.info(f"Created smart collection {data['smart_collection']['title']} in Shopify")
         return response.json()
+
+    def get_products_by_vendor(self, vendor: str, params: dict = None):
+        if params is None:
+            params = {
+                "vendor": vendor,
+                "limit": 250
+            }
+
+        response = requests.get(f"{self.SHOPIFY_API_URL}/products.json", params=params, headers=self.SHOPIFY_HEADERS)
+        if response.status_code != 200:
+            logger.error(f"Error fetching products by vendor from Shopify: {response.status_code} - {response.text}")
+            return {}
+        logger.info(f"Fetched {len(response.json().get('products', []))} products by vendor {vendor} from Shopify")
+        return response.json()
+
+    def delete_product(self, product_id: int, data: dict = None):
+        """Esta funcion "elimina" un producto de shopify, pero en realidad lo desactiva
+        y lo pone en modo "borrador"
+
+        Args:
+            product_id (int): ID del producto a eliminar
+
+        Returns:
+            dict: Respuesta de la API de Shopify
+        """
+        if data is None:
+            data = {
+                "product": {
+                    "status": "draft"
+                }
+            }
+        response = requests.put(f"{self.SHOPIFY_API_URL}/products/{product_id}.json", headers=self.SHOPIFY_HEADERS, json=data)
+        if response.status_code != 200:
+            logger.error(f"Error deleting product from Shopify: {response.status_code} - {response.text}")
+            return {}
+        logger.info(f"Deleted product {product_id} from Shopify")
+        return response.json()
+
+    def fetch_shopify_variants_by_handle(self, handle):
+        params = {
+            "fields": "variants",
+            "handle": handle
+        }
+        time.sleep(0.1)
+        response = self.get_products(params)
+        variants = []
+        for product in response.get("products", []):
+            variants.extend(product.get("variants", []))
+        return variants
+
+    def process_variant_stock_update(self, tienda_config, tn_variant, sh_variant):
+        expected_sku = str(tn_variant["id"])
+        stock = tn_variant["stock"] if tn_variant["stock"] is not None else 999
+
+        if sh_variant["sku"] == expected_sku and sh_variant["inventory_quantity"] != stock:
+            logger.info(f"Updating stock for variant {sh_variant['id']}")
+            data = {
+                "location_id": tienda_config['deposit'],
+                "inventory_item_id": sh_variant['inventory_item_id'],
+                "available": stock
+            }
+            time.sleep(0.1)
+            self.set_inventory_level(data)
