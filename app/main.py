@@ -147,8 +147,8 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                # if not products_quantity:
-                #     params["updated_at_min"] = updated_at_min
+                if not products_quantity:
+                    params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
                 current_products = tiendanube.get_products(url, headers, params)
@@ -181,17 +181,17 @@ def sync_products():
                 for product in products_to_eliminate:
                     shopify.delete_product(product.get("id"))
 
-                # for product in products:
-                #     if product.get('updated_at') and product['updated_at'] >= updated_at_min:
-                #         filtered_data.append(product)
-                #         continue
+                for product in products:
+                    if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+                        filtered_data.append(product)
+                        continue
 
-                #     for variant in product.get('variants', []):
-                #         if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
-                #             filtered_data.append(product)
-                #             break
+                    for variant in product.get('variants', []):
+                        if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
+                            filtered_data.append(product)
+                            break
 
-                # products = filtered_data
+                products = filtered_data
 
             logger.info(f"Total products to update: {len(products)}")
 
@@ -479,9 +479,19 @@ def create_smart_collections():
 
 
 categories_to_create = [
-    ("indumentaria", "hombre", ["pantalon", "remera"]),
-    ("indumentaria", "mujer", ["pantalon", "remera"]),
-    ("indumentaria", "nino", ["pantalon", "remera"]),
+    ("indumentaria", "hombre", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
+    ("indumentaria", "mujer", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
+    ("indumentaria", "nino", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
+
+    ("bazar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
+    ("bazar", "cristaleria", ["otro"]),
+
+    ("electronica", "celulares", ["accesorios", "otro"]),
+    ("electronica", "computadora", ["accesorios", "otro"]),
+    ("electronica", "reloj", ["accesorios", "otro"]),
+
+    ("perfumeria", "hombre", ["perfume", "otro"]),
+    ("perfumeria", "mujer", ["perfume", "otro"]),
 ]
 
 
@@ -553,7 +563,7 @@ def create_collections(categories_to_create):
 
 
 def collection_and_products():
-    # create_collections(categories_to_create)
+    create_collections(categories_to_create)
     sync_products()
 
 
@@ -584,14 +594,13 @@ def sync_stock():
 
 @app.on_event("startup")
 def start_scheduler():
-    collection_and_products()
-    # logger.info("Starting scheduler")
-    # scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
-    # scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
-    # scheduler.start()
+    logger.info("Starting scheduler")
+    scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
+    scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
+    scheduler.start()
 
 
-# @app.on_event("shutdown")
-# def shutdown_scheduler():
-#     logger.info("Shutting down scheduler")
-#     scheduler.shutdown()
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    logger.info("Shutting down scheduler")
+    scheduler.shutdown()

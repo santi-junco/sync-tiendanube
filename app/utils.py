@@ -1,3 +1,6 @@
+import re
+import unicodedata
+
 from app.logger import logger
 
 RANGOS_PRECIO = [
@@ -15,17 +18,22 @@ RANGOS_PRECIO = [
 TAGS_EQUIVALENCIA = {
     "indumentaria": {
         # pantalones
-        "pantalon": "pantalon", 
+        "pantalon": "pantalon",
         "pantalones": "pantalon",
-        "short": "pantalon", 
-        "shorts": "pantalon", 
-        "bermuda": "pantalon", 
+        "short": "pantalon",
+        "shorts": "pantalon",
+        "bermuda": "pantalon",
         "bermudas": "pantalon",
+        "jogger": "pantalon",
+        "joggers": "pantalon",
+        "jogging": "pantalon",
+        "joggings": "pantalon",
 
         # remeras
-        "remera": "remera", 
-        "remeras": "remera", 
-        "chomba": "remera", 
+        "remera": "remera",
+        "remeras": "remera",
+        "chomba": "remera",
+        "chombas": "remera",
         "camiseta": "remera",
         "camisetas": "remera",
 
@@ -36,21 +44,83 @@ TAGS_EQUIVALENCIA = {
         # abrigo
         "abrigos": "abrigo",
         "abrigo": "abrigo",
+        "campera": "abrigo",
+        "camperas": "abrigo",
         "camperita": "abrigo",
         "camperitas": "abrigo",
+        "buzo": "abrigo",
+        "buzos": "abrigo",
+    },
+    "bazar": {
+        "repasador": "repasador",
+        "repasadores": "repasador",
+
+        "servilleta": "servilleta",
+        "servilletas": "servilleta",
+
+        "mantel": "mantel",
+        "manteles": "mantel",
+        "manteleria": "mantel",
+        "mantelerias": "mantel",
+        "individual": "mantel",
+        "individuales": "mantel",
+        "camino de mesa": "mantel",
+        "caminos de mesa": "mantel",
+
+    },
+    "electronica": {
+        "celular": "celular",
+        "celulares": "celular",
+        "smartphone": "celular",
+        "smartphones": "celular",
+
+        "smartwatch": "reloj",
+        "smartwatches": "reloj",
+        "reloj": "reloj",
+        "relojes": "reloj",
+
+        "malla": "accesorios",
+        "mallas": "accesorios",
+        "accesorio": "accesorios",
+        "accesorios": "accesorios",
+        "cable": "accesorios",
+        "cables": "accesorios",
+        "cargador": "accesorios",
+        "cargadores": "accesorios",
+        "auricular": "accesorios",
+        "auriculares": "accesorios",
+    },
+    "perfumeria": {
+        "perfume": "perfume",
+        "perfumes": "perfume",
+        "perfum": "perfume",
+        "perfums": "perfume",
     }
 }
 
 PUBLICOS_EQUIVALENCIA = {
     "hombre": "hombre",
+    "hombres": "hombre",
     "mujer": "mujer",
+    "mujeres": "mujer",
     "niño": "nino",
+    "niños": "nino",
+    "nino": "nino",
+    "ninos": "nino",
     "niña": "nino",
+    "nina": "nino",
+    "niñas": "nino",
+    "ninas": "nino",
+    "nino/a": "nino",
     "niño/a": "nino",
     "bebe": "nino",
     "bebe/a": "nino",
     "bebes": "nino",
+    "bebe/s": "nino",
+    "kid": "nino",
+    "kids": "nino",
 }
+
 
 def calculate_execution_time(start_time, end_time):
     duration = end_time - start_time
@@ -102,22 +172,49 @@ def calculate_price(price, promotional_price, rango_precio=None):
 
     return precio
 
-def create_tags(datos):
-    datos_lower = {item.lower() for item in datos if isinstance(item, str)}
 
-    tienda_id = next((item for item in datos_lower if item.isdigit() and len(item) == 6), None)
+def create_tags(datos):
+    datos_lower = {normalizar(item) for item in datos if isinstance(item, str)}
+    logger.info(f"Datos normalizados: {datos_lower}")
+
+    tienda_id = next((item for item in datos_lower if item.isdigit() and len(item) >= 6), None)
 
     publico_objetivo = next((PUBLICOS_EQUIVALENCIA[item] for item in datos_lower if item in PUBLICOS_EQUIVALENCIA), None)
 
     categorias_generales = {"indumentaria", "perfumeria", "tecnologia", "electronica", "bazar"}
     categoria_general = next((item for item in datos_lower if item in categorias_generales), None)
 
-    categoria_especifica = None
-    if categoria_general in TAGS_EQUIVALENCIA:
-        for item in datos_lower:
-            if item in TAGS_EQUIVALENCIA[categoria_general]:
-                categoria_especifica = TAGS_EQUIVALENCIA[categoria_general][item]
-                break
+    categoria_especifica = find_categoria_especifica(datos_lower, categoria_general)
 
     return [categoria_especifica, tienda_id, publico_objetivo, categoria_general]
 
+
+def normalizar(texto):
+    if not isinstance(texto, str):
+        return ""
+    texto = texto.lower()
+    texto = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode('ascii')
+    texto = re.sub(r'[-/&_]', ' ', texto)  # reemplaza guiones y símbolos por espacio
+    texto = re.sub(r'[^a-z0-9 ]', '', texto)  # elimina todo lo demás
+    texto = re.sub(r'\s+', ' ', texto)  # colapsa espacios múltiples
+    return texto.strip()
+
+
+def find_categoria_especifica(datos_normalizados, categoria_general):
+    if categoria_general not in TAGS_EQUIVALENCIA:
+        return None
+
+    equivalencias = TAGS_EQUIVALENCIA[categoria_general]
+
+    # 1. Intento exacto
+    for item in sorted(datos_normalizados):
+        if item in equivalencias:
+            return equivalencias[item]
+
+    # 2. Intento por substring (más flexible)
+    for item in sorted(datos_normalizados):
+        for key in equivalencias:
+            if key in item:
+                return equivalencias[key]
+
+    return "otro"
