@@ -146,8 +146,8 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                #if not products_quantity:
-                #    params["updated_at_min"] = updated_at_min
+                if not products_quantity:
+                    params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
                 current_products = tiendanube.get_products(url, headers, params)
