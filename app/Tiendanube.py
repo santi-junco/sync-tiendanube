@@ -36,7 +36,6 @@ class Tiendanube():
         params = {
             "per_page": 200,
             "published": "true",
-            "min_stock": 1,
             "fields": "variants",
             "updated_at_min": updated_at_min
         }
