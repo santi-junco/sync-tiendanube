@@ -158,27 +158,27 @@ def preparar_imagen_por_src(img):
 def calculate_price(price, promotional_price=None, rango_precio=None):
     """
     Calcula el precio aplicando los multiplicadores de los rangos.
-    
+
     Args:
         price: Precio base
         promotional_price: Precio promocional (opcional)
         rango_precio: Lista de tuplas (inicio, fin, multiplicador) que definen los rangos
-        
+
     Returns:
         float: Precio con el multiplicador aplicado según el rango correspondiente
     """
     try:
         # Usar el precio promocional si está disponible, de lo contrario usar el precio normal
         precio = float(promotional_price) if promotional_price is not None else float(price)
-        
+
         # Usar los rangos proporcionados o los rangos por defecto
         rangos = rango_precio if rango_precio is not None else RANGOS_PRECIO
-        
+
         # Buscar en qué rango cae el precio y aplicar el multiplicador correspondiente
         for inicio, fin, multiplicador in rangos:
             if inicio <= precio < fin:
                 return round(precio * multiplicador, 2)
-        
+
         # Si no está en ningún rango, devolver el precio sin cambios
         return precio
 
