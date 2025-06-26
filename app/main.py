@@ -143,7 +143,6 @@ def sync_products():
                     "per_page": per_page,
                     "page": page,
                     "published": "true",
-                    "min_stock": 1,
                     "sort_by": "created-at-descending",
                 }
 
