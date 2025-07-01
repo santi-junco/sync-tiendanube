@@ -259,7 +259,6 @@ def sync_products():
 
                 existing_tags.add(tienda)
                 existing_tags.add(TIENDANUBE_STORES[tienda]['category'])
-                existing_tags.add(TIENDANUBE_STORES[tienda].get('category_2', ''))
 
                 # Convertilo de nuevo a lista si necesitás
                 tiendanube_tags = []
