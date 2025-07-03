@@ -146,8 +146,8 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                if not products_quantity:
-                    params["updated_at_min"] = updated_at_min
+                # if not products_quantity:
+                #     params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
                 current_products = tiendanube.get_products(url, headers, params)
@@ -168,29 +168,29 @@ def sync_products():
 
                 page += 1
 
-            if products_quantity:
-                filtered_data = []
-                products_from_shopify = shopify.get_products_by_vendor(tienda).get("products", [])
-                products_to_eliminate = []
-                products_id_from_tiendanube = [str(p.get("id")) for p in products]
-                for product in products_from_shopify:
-                    if product.get("handle") not in products_id_from_tiendanube:
-                        products_to_eliminate.append(product)
-                logger.info(f"Products to eliminate: {len(products_to_eliminate)}")
-                for product in products_to_eliminate:
-                    shopify.delete_product(product.get("id"))
+            # if products_quantity:
+            #     filtered_data = []
+            #     products_from_shopify = shopify.get_products_by_vendor(tienda).get("products", [])
+            #     products_to_eliminate = []
+            #     products_id_from_tiendanube = [str(p.get("id")) for p in products]
+            #     for product in products_from_shopify:
+            #         if product.get("handle") not in products_id_from_tiendanube:
+            #             products_to_eliminate.append(product)
+            #     logger.info(f"Products to eliminate: {len(products_to_eliminate)}")
+            #     for product in products_to_eliminate:
+            #         shopify.delete_product(product.get("id"))
 
-                for product in products:
-                    if product.get('updated_at') and product['updated_at'] >= updated_at_min:
-                        filtered_data.append(product)
-                        continue
+            #     for product in products:
+            #         if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+            #             filtered_data.append(product)
+            #             continue
 
-                    for variant in product.get('variants', []):
-                        if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
-                            filtered_data.append(product)
-                            break
+            #         for variant in product.get('variants', []):
+            #             if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
+            #                 filtered_data.append(product)
+            #                 break
 
-                products = filtered_data
+            #     products = filtered_data
 
             logger.info(f"Total products to update: {len(products)}")
 
@@ -220,7 +220,7 @@ def sync_products():
                         "taxcode": None,
                         "position": variant["position"],
                         "weight_unit": None,
-                        "compare_at_price": variant["compare_at_price"],
+                        "compare_at_price": calculate_price(variant["compare_at_price"]),
                         "inventory_policy": "deny",
                         "inventory_quantity": stock,
                         "presentment_prices": [],
