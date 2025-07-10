@@ -176,7 +176,7 @@ class Shopify():
             "fields": "variants",
             "handle": handle
         }
-        time.sleep(0.1)
+        time.sleep(0.3)
         response = self.get_products(params)
         variants = []
         for product in response.get("products", []):
@@ -194,5 +194,5 @@ class Shopify():
                 "inventory_item_id": sh_variant['inventory_item_id'],
                 "available": stock
             }
-            time.sleep(0.1)
+            time.sleep(0.3)
             self.set_inventory_level(data)

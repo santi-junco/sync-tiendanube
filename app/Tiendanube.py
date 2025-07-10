@@ -33,15 +33,33 @@ class Tiendanube():
     def fetch_recent_variants(self, tienda_config, updated_at_min):
         url = f"{tienda_config['url']}/products"
         headers = tienda_config['headers']
-        params = {
-            "per_page": 200,
-            "published": "true",
-            "fields": "variants",
-            "updated_at_min": updated_at_min
-        }
-
-        products = self.get_products(url, headers, params)
+        page = 1
+        products = []
         variants = []
+
+        while True:
+            params = {
+                "per_page": 200,
+                "published": "true",
+                "fields": "variants",
+                "page": page,
+                "updated_at_min": updated_at_min
+            }
+
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                data = response.json()
+                products.extend(data)
+
+                total_prod = int(response.headers.get("x-total-count", 0))
+
+                if len(products) >= total_prod:
+                    break
+
+                page += 1
+            else:
+                logger.error(f"Error fetching products from Tiendanube: {response.status_code} - {response.text}")
+                return []
 
         for product in products:
             for variant in product.get("variants", []):
