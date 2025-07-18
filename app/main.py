@@ -4,7 +4,7 @@ import json
 import html
 
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from fastapi import FastAPI
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.logger import logger
 from app.Shopify import Shopify
 from app.Tiendanube import Tiendanube
-from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price, create_tags
+from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price, create_tags, CATEGORIES_TO_CREATE
 
 # Cargar variables de entorno desde el archivo .env
 env_path = Path(__file__).resolve().parent.parent / '.env'
@@ -130,7 +130,8 @@ def sync_products():
             # Obtengo los productos de Tiendanube
             products = []
             headers = TIENDANUBE_STORES[tienda]['headers']
-            products_quantity = TIENDANUBE_STORES[tienda].get('products_quantity')
+            products_quantity = TIENDANUBE_STORES[tienda].get('product_quantity')
+            is_new_store = TIENDANUBE_STORES[tienda].get('is_new')
 
             fetched = 0
             page = 1
@@ -146,7 +147,7 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                if not products_quantity:
+                if not products_quantity and not is_new_store:
                     params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
@@ -193,6 +194,11 @@ def sync_products():
                 products = filtered_data
 
             logger.info(f"Total products to update: {len(products)}")
+
+            if is_new_store:
+                TIENDANUBE_STORES[tienda]["is_new"] = False
+                updated_tiendas_str = json.dumps(TIENDANUBE_STORES)
+                set_key(env_path, "TIENDAS", updated_tiendas_str)
 
             for product in products:
 
@@ -351,7 +357,7 @@ def sync_products():
                         if not tiendanube_stock_variant:
                             continue
 
-                        stock = tiendanube_stock_variant.get("stock") or 999
+                        stock = tiendanube_stock_variant.get("stock") if tiendanube_stock_variant.get("stock") is not None else 999
                         if variant.get("inventory_quantity") == stock and TIENDANUBE_STORES[tienda]['deposit'] == shopify.DEFAULT_DEPOSIT:
                             logger.info(f"Stock for variant {variant['id']} is already up to date in Shopify")
                             continue
@@ -476,23 +482,6 @@ def create_smart_collections():
             shopify.create_smart_collection(smart_collections_full_hierarchy)
 
 
-categories_to_create = [
-    ("indumentaria", "hombre", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
-    ("indumentaria", "mujer", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
-    ("indumentaria", "nino", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
-
-    ("bazar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
-    ("bazar", "cristaleria", ["otro"]),
-
-    ("electronica", "celulares", ["accesorios", "otro"]),
-    ("electronica", "computadora", ["accesorios", "otro"]),
-    ("electronica", "reloj", ["accesorios", "otro"]),
-
-    ("perfumeria", "hombre", ["perfume", "otro"]),
-    ("perfumeria", "mujer", ["perfume", "otro"]),
-]
-
-
 def create_collections(categories_to_create):
     # Obtengo las collections que ya estan creadas
     params = {
@@ -561,7 +550,7 @@ def create_collections(categories_to_create):
 
 
 def collection_and_products():
-    create_collections(categories_to_create)
+    create_collections(CATEGORIES_TO_CREATE)
     sync_products()
 
 

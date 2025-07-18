@@ -95,8 +95,53 @@ TAGS_EQUIVALENCIA = {
         "perfumes": "perfume",
         "perfum": "perfume",
         "perfums": "perfume",
+    },
+    "blanqueria": {
+        "sabana": "sabana",
+        "sabanas": "sabana",
+
+        "acolchado": "acolchado",
+        "acolchados": "acolchado",
+
+        "frazada": "frazada",
+        "frazadas": "frazada",
+
+        "almohada": "almohada",
+        "almohadas": "almohada",
+
+        "alfombra": "alfombra",
+        "alfombras": "alfombra",
+    },
+    "valija-bolso": {
+        "valija": "valija",
+        "valijas": "valija",
+
+        "bolso": "bolso",
+        "bolsos": "bolso",
     }
 }
+
+CATEGORIES_TO_CREATE = [
+    ("indumentaria", "hombre", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
+    ("indumentaria", "mujer", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
+    ("indumentaria", "nino", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
+
+    ("bazar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
+    ("bazar", "cristaleria", ["otro"]),
+
+    ("electronica", "celulares", ["accesorios", "otro"]),
+    ("electronica", "computadora", ["accesorios", "otro"]),
+    ("electronica", "reloj", ["accesorios", "otro"]),
+
+    ("perfumeria", "hombre", ["perfume", "otro"]),
+    ("perfumeria", "mujer", ["perfume", "otro"]),
+
+    ("blanqueria", "cama", ["sabana", "frazada", "acolchado", "almohada", "otro"]),
+    ("blanqueria", "alfombra", ["otro"]),
+
+    ("valija-bolso", "valija", ["chica", "mediana", "grande", "otro"]),
+    ("valija-bolso", "bolso", ["chico", "mediano", "grande", "otro"]),
+]
 
 PUBLICOS_EQUIVALENCIA = {
     "hombre": "hombre",
