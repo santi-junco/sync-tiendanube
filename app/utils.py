@@ -124,8 +124,6 @@ TAGS_EQUIVALENCIA = {
         "portafolio": "portafolio",
         "portafolios": "portafolio",
 
-
-
         "valija": "valija",
         "valijas": "valija",
 
@@ -156,8 +154,8 @@ CATEGORIES_TO_CREATE = [
     ("valija-bolso", "mochila", ["portanotebook", "urbana", "materas", "otro"]),
     ("valija-bolso", "portafolio", ["chico", "mediano", "grande", "otro"]),
     ("valija-bolso", "valija", ["carry on", "mediana", "grande","set valijas" "otro"]),
-    ("valija-bolso", "bolso"),
-    ("valija-bolso", "portafolio"),
+    ("valija-bolso", "bolso", ["otro"]),
+    ("valija-bolso", "portafolio", ["otro"]),
 
 ]
 
