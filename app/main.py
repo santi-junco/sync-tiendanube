@@ -4,7 +4,7 @@ import json
 import html
 
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from fastapi import FastAPI
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.logger import logger
 from app.Shopify import Shopify
 from app.Tiendanube import Tiendanube
-from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price
+from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price, create_tags, CATEGORIES_TO_CREATE
 
 # Cargar variables de entorno desde el archivo .env
 env_path = Path(__file__).resolve().parent.parent / '.env'
@@ -130,7 +130,8 @@ def sync_products():
             # Obtengo los productos de Tiendanube
             products = []
             headers = TIENDANUBE_STORES[tienda]['headers']
-            products_quantity = TIENDANUBE_STORES[tienda].get('products_quantity')
+            products_quantity = TIENDANUBE_STORES[tienda].get('product_quantity')
+            is_new_store = TIENDANUBE_STORES[tienda].get('is_new')
 
             fetched = 0
             page = 1
@@ -146,7 +147,7 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                if not products_quantity:
+                if not products_quantity and not is_new_store:
                     params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
@@ -194,6 +195,11 @@ def sync_products():
 
             logger.info(f"Total products to update: {len(products)}")
 
+            if is_new_store:
+                TIENDANUBE_STORES[tienda]["is_new"] = False
+                updated_tiendas_str = json.dumps(TIENDANUBE_STORES)
+                set_key(env_path, "TIENDAS", updated_tiendas_str)
+
             for product in products:
 
                 logger.info(f"Processing product {product['id']} from Tiendanube")
@@ -220,7 +226,7 @@ def sync_products():
                         "taxcode": None,
                         "position": variant["position"],
                         "weight_unit": None,
-                        "compare_at_price": variant["compare_at_price"],
+                        "compare_at_price": calculate_price(variant["compare_at_price"]),
                         "inventory_policy": "deny",
                         "inventory_quantity": stock,
                         "presentment_prices": [],
@@ -250,16 +256,19 @@ def sync_products():
 
                 # Agregá las categorías si no están ya
                 for handle_category in product.get("categories", []):
-                    tag_name = handle_category["handle"]["es"].strip()
+                    tag_handle = handle_category["handle"]["es"].strip()
+                    tag_name = handle_category["name"]["es"].strip()
+                    if tag_handle not in existing_tags:
+                        existing_tags.add(tag_handle)
                     if tag_name not in existing_tags:
                         existing_tags.add(tag_name)
 
                 existing_tags.add(tienda)
                 existing_tags.add(TIENDANUBE_STORES[tienda]['category'])
-                existing_tags.add(TIENDANUBE_STORES[tienda].get('category_2', ''))
 
                 # Convertilo de nuevo a lista si necesitás
-                tiendanube_tags = list(existing_tags)
+                tiendanube_tags = []
+                tiendanube_tags = create_tags(existing_tags)
 
                 logger.info(f"Tags for product {product['id']}: {tiendanube_tags}")
 
@@ -348,7 +357,7 @@ def sync_products():
                         if not tiendanube_stock_variant:
                             continue
 
-                        stock = tiendanube_stock_variant.get("stock") or 999
+                        stock = tiendanube_stock_variant.get("stock") if tiendanube_stock_variant.get("stock") is not None else 999
                         if variant.get("inventory_quantity") == stock and TIENDANUBE_STORES[tienda]['deposit'] == shopify.DEFAULT_DEPOSIT:
                             logger.info(f"Stock for variant {variant['id']} is already up to date in Shopify")
                             continue
@@ -473,8 +482,75 @@ def create_smart_collections():
             shopify.create_smart_collection(smart_collections_full_hierarchy)
 
 
+def create_collections(categories_to_create):
+    # Obtengo las collections que ya estan creadas
+    params = {
+        "fields": "handle",
+        "limit": 250
+    }
+    response = shopify.get_smart_collections(params)
+    if response:
+        shopify_collections = response.get("smart_collections", [])
+    shopify_collections = [collection["handle"] for collection in shopify_collections]
+
+    for cat_general, second_level, specifics in categories_to_create:
+        if cat_general in shopify_collections:
+            logger.info(f"Collection {cat_general} already exists in Shopify")
+        else:
+            # Nivel 1: solo categoría general
+            collections = {
+                "smart_collection": {
+                    "title": cat_general,
+                    "handle": cat_general,
+                    "rules": [{"column": "tag", "relation": "equals", "condition": cat_general}],
+                    "published": True
+                }
+            }
+            time.sleep(0.35)
+            shopify.create_smart_collection(collections)
+
+        if f"{cat_general}-{second_level}" in shopify_collections:
+            logger.info(f"Collection {cat_general}-{second_level} already exists in Shopify")
+        else:
+            # Nivel 2: general + segundo nivel
+            collections = {
+                "smart_collection": {
+                    "title": f"{second_level}",
+                    "handle": f"{cat_general}-{second_level}",
+                    "rules": [
+                        {"column": "tag", "relation": "equals", "condition": cat_general},
+                        {"column": "tag", "relation": "equals", "condition": second_level}
+                    ],
+                    "published": True
+                }
+            }
+            time.sleep(0.35)
+            shopify.create_smart_collection(collections)
+
+        # Nivel 3: + específica
+        for specific in specifics:
+            if f"{cat_general}-{second_level}-{specific}" in shopify_collections:
+                logger.info(f"Collection {cat_general}-{second_level}-{specific} already exists in Shopify")
+            else:
+
+                collections = {
+                    "smart_collection": {
+                        "title": f"{specific}",
+                        "handle": f"{cat_general}-{second_level}-{specific}",
+                        "rules": [
+                            {"column": "tag", "relation": "equals", "condition": cat_general},
+                            {"column": "tag", "relation": "equals", "condition": second_level},
+                            {"column": "tag", "relation": "equals", "condition": specific}
+                        ],
+                        "published": True
+                    }
+                }
+                time.sleep(0.35)
+                shopify.create_smart_collection(collections)
+
+
 def collection_and_products():
-    # create_smart_collections()
+    create_collections(CATEGORIES_TO_CREATE)
     sync_products()
 
 

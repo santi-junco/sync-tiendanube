@@ -116,7 +116,22 @@ class Shopify():
         if response.status_code != 201:
             logger.error(f"Error creating smart collection in Shopify: {response.status_code} - {response.text}")
             return {}
-        logger.info(f"Created smart collection {data['smart_collection']['title']} in Shopify")
+        else:
+            collection_id = response.json()["smart_collection"]["id"]
+
+            update_data = {
+                "smart_collection": {
+                    "id": collection_id,
+                    "sort_order": "created-desc"
+                }
+            }
+
+            requests.put(
+                f"{self.SHOPIFY_API_URL}/smart_collections/{collection_id}.json",
+                headers=self.SHOPIFY_HEADERS,
+                json=update_data
+            )
+            logger.info(f"Created smart collection {data['smart_collection']['title']} in Shopify")
         return response.json()
 
     def get_products_by_vendor(self, vendor: str, params: dict = None):
@@ -161,7 +176,7 @@ class Shopify():
             "fields": "variants",
             "handle": handle
         }
-        time.sleep(0.1)
+        time.sleep(0.3)
         response = self.get_products(params)
         variants = []
         for product in response.get("products", []):
@@ -179,5 +194,5 @@ class Shopify():
                 "inventory_item_id": sh_variant['inventory_item_id'],
                 "available": stock
             }
-            time.sleep(0.1)
+            time.sleep(0.3)
             self.set_inventory_level(data)
