@@ -113,6 +113,19 @@ TAGS_EQUIVALENCIA = {
         "alfombras": "alfombra",
     },
     "valija-bolso": {
+        "accesorios": "accesorio",
+
+        "mochilas": "mochila",
+        "mochila": "mochila",
+
+        "matera": "matera",
+        "materas": "matera",
+
+        "portafolio": "portafolio",
+        "portafolios": "portafolio",
+
+
+
         "valija": "valija",
         "valijas": "valija",
 
@@ -139,8 +152,13 @@ CATEGORIES_TO_CREATE = [
     ("blanqueria", "cama", ["sabana", "frazada", "acolchado", "almohada", "otro"]),
     ("blanqueria", "alfombra", ["otro"]),
 
-    ("valija-bolso", "valija", ["chica", "mediana", "grande", "otro"]),
-    ("valija-bolso", "bolso", ["chico", "mediano", "grande", "otro"]),
+    ("valija-bolso", "accesorio", ["de viaje", "beauty", "otro"]),
+    ("valija-bolso", "mochila", ["portanotebook", "urbana", "materas", "otro"]),
+    ("valija-bolso", "portafolio", ["chico", "mediano", "grande", "otro"]),
+    ("valija-bolso", "valija", ["carry on", "mediana", "grande","set valijas" "otro"]),
+    ("valija-bolso", "bolso"),
+    ("valija-bolso", "portafolio"),
+
 ]
 
 PUBLICOS_EQUIVALENCIA = {
