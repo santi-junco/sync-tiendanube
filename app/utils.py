@@ -112,7 +112,7 @@ TAGS_EQUIVALENCIA = {
         "alfombra": "alfombra",
         "alfombras": "alfombra",
     },
-    "valija-bolso": {
+    "valija bolso": {
         "accesorios": "accesorio",
 
         "mochilas": "mochila",
@@ -256,7 +256,7 @@ def create_tags(datos):
 
     publico_objetivo = next((PUBLICOS_EQUIVALENCIA[item] for item in datos_lower if item in PUBLICOS_EQUIVALENCIA), None)
 
-    categorias_generales = {"indumentaria", "perfumeria", "tecnologia", "electronica", "bazar"}
+    categorias_generales = {"indumentaria", "perfumeria", "electronica", "bazar", "blanqueria", "valija bolso"}
     categoria_general = next((item for item in datos_lower if item in categorias_generales), None)
 
     categoria_especifica = find_categoria_especifica(datos_lower, categoria_general)
