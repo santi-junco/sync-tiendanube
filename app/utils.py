@@ -147,13 +147,15 @@ CATEGORIES_TO_CREATE = [
     ("perfumeria", "hombre", ["perfume", "otro"]),
     ("perfumeria", "mujer", ["perfume", "otro"]),
 
-    ("blanqueria", "cama", ["sabana", "frazada", "acolchado", "almohada", "otro"]),
+    ("blanqueria", "ropa-cama", ["sabana", "frazada", "acolchado", "almohada", "otro"]),
     ("blanqueria", "alfombra", ["otro"]),
+    ("blanqueria", "cortina", ["otro"]),
+    ("blanqueria", "toalla", ["otro"]),
 
-    ("valija-bolso", "accesorio", ["de viaje", "beauty", "otro"]),
+    ("valija-bolso", "accesorio", ["de-viaje", "beauty", "otro"]),
     ("valija-bolso", "mochila", ["portanotebook", "urbana", "materas", "otro"]),
     ("valija-bolso", "portafolio", ["chico", "mediano", "grande", "otro"]),
-    ("valija-bolso", "valija", ["carry on", "mediana", "grande","set valijas" "otro"]),
+    ("valija-bolso", "valija", ["carry-on", "mediana", "grande", "set-valijas", "otro"]),
     ("valija-bolso", "bolso", ["otro"]),
     ("valija-bolso", "portafolio", ["otro"]),
 
