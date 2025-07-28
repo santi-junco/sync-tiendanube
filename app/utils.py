@@ -52,21 +52,37 @@ TAGS_EQUIVALENCIA = {
         "buzos": "abrigo",
     },
     "bazar": {
-        "repasador": "repasador",
-        "repasadores": "repasador",
+        "repasador": "manteleria",
+        "repasadores": "manteleria",
 
-        "servilleta": "servilleta",
-        "servilletas": "servilleta",
+        "servilleta": "manteleria",
+        "servilletas": "manteleria",
 
-        "mantel": "mantel",
-        "manteles": "mantel",
-        "manteleria": "mantel",
-        "mantelerias": "mantel",
-        "individual": "mantel",
-        "individuales": "mantel",
-        "camino de mesa": "mantel",
-        "caminos de mesa": "mantel",
+        "mantel": "manelteria",
+        "manteles": "manelteria",
+        "manteleria": "manelteria",
+        "mantelerias": "manelteria",
+        "individual": "manelteria",
+        "individuales": "manelteria",
+        "camino de mesa": "manelteria",
+        "caminos de mesa": "manelteria",
 
+    },
+    "textil hogar": {
+        "repasador": "manteleria",
+        "repasadores": "manteleria",
+
+        "servilleta": "manteleria",
+        "servilletas": "manteleria",
+
+        "mantel": "manelteria",
+        "manteles": "manelteria",
+        "manteleria": "manelteria",
+        "mantelerias": "manelteria",
+        "individual": "manelteria",
+        "individuales": "manelteria",
+        "camino de mesa": "manelteria",
+        "caminos de mesa": "manelteria",
     },
     "electronica": {
         "celular": "celular",
@@ -97,20 +113,25 @@ TAGS_EQUIVALENCIA = {
         "perfums": "perfume",
     },
     "blanqueria": {
-        "sabana": "sabana",
-        "sabanas": "sabana",
-
-        "acolchado": "acolchado",
-        "acolchados": "acolchado",
-
-        "frazada": "frazada",
-        "frazadas": "frazada",
-
-        "almohada": "almohada",
-        "almohadas": "almohada",
+        "sabana": "ropa-cama",
+        "sabanas": "ropa-cama",
+        "acolchado": "ropa-cama",
+        "acolchados": "ropa-cama",
+        "frazada": "ropa-cama",
+        "frazadas": "ropa-cama",
+        "almohada": "ropa-cama",
+        "almohadas": "ropa-cama",
 
         "alfombra": "alfombra",
         "alfombras": "alfombra",
+
+        "cortina": "cortina",
+        "cortinas": "cortina",
+
+        "toalla": "toalla",
+        "toallas": "toalla",
+        "toallon": "toalla",
+        "toallones": "toalla",
     },
     "valija bolso": {
         "accesorios": "accesorio",
@@ -139,6 +160,7 @@ CATEGORIES_TO_CREATE = [
 
     ("bazar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
     ("bazar", "cristaleria", ["otro"]),
+    ("bazar", "cocina", ["otro"]),
 
     ("electronica", "celulares", ["accesorios", "otro"]),
     ("electronica", "computadora", ["accesorios", "otro"]),
@@ -159,6 +181,7 @@ CATEGORIES_TO_CREATE = [
     ("valija-bolso", "bolso", ["otro"]),
     ("valija-bolso", "portafolio", ["otro"]),
 
+    ("textil-hogar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
 ]
 
 PUBLICOS_EQUIVALENCIA = {
@@ -250,21 +273,71 @@ def calculate_price(price, promotional_price=None, rango_precio=None):
         return price  # Devolver el precio original en caso de error
 
 
+def asignar_categoria(info_set):
+    normalizados = [normalizar(palabra) for palabra in info_set]
+
+    mejor_match = None
+    mejor_puntaje = 0
+
+    for categoria, subcategoria, subsubcategorias in CATEGORIES_TO_CREATE:
+        puntaje = 0
+        cat_norm = normalizar(categoria)
+        subcat_norm = normalizar(subcategoria)
+
+        if cat_norm in normalizados:
+            puntaje += 2
+        if subcat_norm in normalizados:
+            puntaje += 3
+
+        subsub_matches = []
+        for ssc in subsubcategorias:
+            ssc_norm = normalizar(ssc)
+            for palabra in normalizados:
+                # Coincidencia exacta o por pluralización leve (ej: sabanas → sabana)
+                if (
+                    palabra == ssc_norm or
+                    palabra.startswith(ssc_norm) and len(palabra) - len(ssc_norm) <= 3
+                ):
+                    subsub_matches.append(ssc)
+                    break
+
+        if subsub_matches:
+            puntaje += 5 * len(subsub_matches)
+        else:
+            subsub_matches = ["otro"]
+
+        if puntaje > mejor_puntaje:
+            mejor_puntaje = puntaje
+            mejor_match = [categoria, subcategoria] + subsub_matches
+
+    return mejor_match
+
+
 def create_tags(datos):
     datos_lower = {normalizar(item) for item in datos if isinstance(item, str)}
-    logger.info(f"Datos normalizados: {datos_lower}")
 
     tienda_id = next((item for item in datos_lower if item.isdigit() and len(item) >= 6), None)
 
     publico_objetivo = next((PUBLICOS_EQUIVALENCIA[item] for item in datos_lower if item in PUBLICOS_EQUIVALENCIA), None)
 
-    categorias_generales = {"indumentaria", "perfumeria", "electronica", "bazar", "blanqueria", "valija bolso"}
-    categoria_general = next((item for item in datos_lower if item in categorias_generales), None)
+    if any(palabra in datos_lower for palabra in ["bazar", "bano", "cocina"]):
+        categoria_general = "bazar"
+    elif any(palabra in datos_lower for palabra in ["blanqueria", "dormitorio"]):
+        categoria_general = "blanqueria"
+    else: 
+        categorias_generales = {"indumentaria", "perfumeria", "electronica", "valija bolso", "textil hogar"}
+        categoria_general = next((item for item in datos_lower if item in categorias_generales), None)
 
     categoria_especifica = find_categoria_especifica(datos_lower, categoria_general)
 
-    return [categoria_especifica, tienda_id, publico_objetivo, categoria_general]
+    datos_lower.add(normalizar(categoria_especifica))
+    logger.info(f"Datos normalizados: {datos_lower}")
 
+    categorias = asignar_categoria(datos_lower)
+    categorias.append(tienda_id)
+    categorias.append(publico_objetivo)
+
+    return categorias
 
 def normalizar(texto):
     if not isinstance(texto, str):
