@@ -161,6 +161,7 @@ CATEGORIES_TO_CREATE = [
     ("bazar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
     ("bazar", "cristaleria", ["otro"]),
     ("bazar", "cocina", ["otro"]),
+    ("bazar", "bano", ["otro"]),
 
     ("electronica", "celulares", ["accesorios", "otro"]),
     ("electronica", "computadora", ["accesorios", "otro"]),
@@ -273,44 +274,35 @@ def calculate_price(price, promotional_price=None, rango_precio=None):
         return price  # Devolver el precio original en caso de error
 
 
-def asignar_categoria(info_set):
+def asignar_categoria_jerarquica(info_set):
     normalizados = [normalizar(palabra) for palabra in info_set]
 
-    mejor_match = None
-    mejor_puntaje = 0
-
     for categoria, subcategoria, subsubcategorias in CATEGORIES_TO_CREATE:
-        puntaje = 0
         cat_norm = normalizar(categoria)
         subcat_norm = normalizar(subcategoria)
 
         if cat_norm in normalizados:
-            puntaje += 2
-        if subcat_norm in normalizados:
-            puntaje += 3
+            # Categoria encontrada, seguir con subcategoria
+            if subcat_norm in normalizados:
+                subsub_matches = []
+                for ssc in subsubcategorias:
+                    ssc_norm = normalizar(ssc)
+                    for palabra in normalizados:
+                        if palabra == ssc_norm or (palabra.startswith(ssc_norm) and len(palabra) - len(ssc_norm) <= 3):
+                            subsub_matches.append(ssc)
+                            break
+                if subsub_matches:
+                    return [categoria, subcategoria] + subsub_matches
+                else:
+                    # No subsub encontrada, devolver 'otro' si está definido
+                    return [categoria, subcategoria, "otro" if "otro" in subsubcategorias else None]
+            else:
+                # Subcategoria no encontrada, pero ¿hay alguna que matchee parcialmente?
+                if any(normalizar(sc) in normalizados for cat, sc, _ in CATEGORIES_TO_CREATE if normalizar(categoria) == normalizar(cat)):
+                    continue  # Otras subcategorías posibles, seguir buscando
+                return [categoria, None, None]
 
-        subsub_matches = []
-        for ssc in subsubcategorias:
-            ssc_norm = normalizar(ssc)
-            for palabra in normalizados:
-                # Coincidencia exacta o por pluralización leve (ej: sabanas → sabana)
-                if (
-                    palabra == ssc_norm or
-                    palabra.startswith(ssc_norm) and len(palabra) - len(ssc_norm) <= 3
-                ):
-                    subsub_matches.append(ssc)
-                    break
-
-        if subsub_matches:
-            puntaje += 5 * len(subsub_matches)
-        else:
-            subsub_matches = ["otro"]
-
-        if puntaje > mejor_puntaje:
-            mejor_puntaje = puntaje
-            mejor_match = [categoria, subcategoria] + subsub_matches
-
-    return mejor_match
+    return [None, None, None]
 
 
 def create_tags(datos):
@@ -330,10 +322,11 @@ def create_tags(datos):
 
     categoria_especifica = find_categoria_especifica(datos_lower, categoria_general)
 
+    datos_lower.add(normalizar(categoria_general))
     datos_lower.add(normalizar(categoria_especifica))
     logger.info(f"Datos normalizados: {datos_lower}")
 
-    categorias = asignar_categoria(datos_lower)
+    categorias = asignar_categoria_jerarquica(datos_lower)
     categorias.append(tienda_id)
     categorias.append(publico_objetivo)
 
