@@ -4,7 +4,7 @@ import json
 import html
 
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -131,7 +131,6 @@ def sync_products():
             products = []
             headers = TIENDANUBE_STORES[tienda]['headers']
             products_quantity = TIENDANUBE_STORES[tienda].get('product_quantity')
-            is_new_store = TIENDANUBE_STORES[tienda].get('is_new')
 
             fetched = 0
             page = 1
@@ -147,7 +146,7 @@ def sync_products():
                     "sort_by": "created-at-descending",
                 }
 
-                if not products_quantity and not is_new_store:
+                if not products_quantity:
                     params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
@@ -169,36 +168,31 @@ def sync_products():
 
                 page += 1
 
-            if products_quantity:
-                filtered_data = []
-                products_from_shopify = shopify.get_products_by_vendor(tienda).get("products", [])
-                products_to_eliminate = []
-                products_id_from_tiendanube = [str(p.get("id")) for p in products]
-                for product in products_from_shopify:
-                    if product.get("handle") not in products_id_from_tiendanube:
-                        products_to_eliminate.append(product)
-                logger.info(f"Products to eliminate: {len(products_to_eliminate)}")
-                for product in products_to_eliminate:
-                    shopify.delete_product(product.get("id"))
+            filtered_data = []
+            products_from_shopify = shopify.get_products_by_vendor(tienda).get("products", [])
+            products_to_eliminate = []
+            products_id_from_tiendanube = [str(p.get("id")) for p in products]
+            for product in products_from_shopify:
+                if product.get("handle") not in products_id_from_tiendanube:
+                    products_to_eliminate.append(product)
+            logger.info(f"Products to eliminate: {len(products_to_eliminate)}")
+            for product in products_to_eliminate:
+                shopify.delete_product(product.get("id"))
 
-                for product in products:
-                    if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+            for product in products:
+                if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+                    filtered_data.append(product)
+                    continue
+
+                for variant in product.get('variants', []):
+                    if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
                         filtered_data.append(product)
-                        continue
+                        break
 
-                    for variant in product.get('variants', []):
-                        if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
-                            filtered_data.append(product)
-                            break
-
-                products = filtered_data
+            products = filtered_data
 
             logger.info(f"Total products to update: {len(products)}")
-
-            if is_new_store:
-                TIENDANUBE_STORES[tienda]["is_new"] = False
-                updated_tiendas_str = json.dumps(TIENDANUBE_STORES)
-                set_key(env_path, "TIENDAS", updated_tiendas_str)
+            data = []
 
             for product in products:
 
@@ -311,7 +305,7 @@ def sync_products():
                             "options": tiendanube_attributes or shopify_product['options']
                         }
                     }
-
+                    time.sleep(0.3)
                     response = shopify.update_product(shopify_product['id'], data)
 
                 else:
@@ -331,6 +325,281 @@ def sync_products():
                         }
                     }
 
+                    time.sleep(0.3)
+                    response = shopify.create_product(data)
+
+                # Si el producto se crea correctamente, actualizo las imagenes
+                if response:
+                    shopify_product = response.get("product", [])
+                    shopify_product_variants = shopify_product.get("variants", [])
+
+                    # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
+                    shopify_variant_map = {}
+                    for variant in shopify_product_variants:
+                        # shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
+                        sku = str(variant.get("sku"))
+                        shopify_variant_map[sku] = variant.get("id")
+
+                        inventory_item_id = variant.get("inventory_item_id")
+                        if not inventory_item_id:
+                            continue  # Evitar errores si no viene
+
+                        # Buscar el stock correspondiente a este SKU
+                        tiendanube_stock_variant = next(
+                            (v for v in product.get("variants", []) if str(v["id"]) == sku),
+                            None
+                        )
+                        if not tiendanube_stock_variant:
+                            continue
+
+                        stock = tiendanube_stock_variant.get("stock") if tiendanube_stock_variant.get("stock") is not None else 999
+                        if variant.get("inventory_quantity") == stock and TIENDANUBE_STORES[tienda]['deposit'] == shopify.DEFAULT_DEPOSIT:
+                            logger.info(f"Stock for variant {variant['id']} is already up to date in Shopify")
+                            continue
+
+                        data = {
+                            "location_id": TIENDANUBE_STORES[tienda]['deposit'],
+                            "inventory_item_id": variant['inventory_item_id'],
+                            "available": stock
+                        }
+                        time.sleep(1)  # Evitar rate limit de Shopify
+                        response = shopify.set_inventory_level(data)
+                        if response:
+                            logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
+
+                        if TIENDANUBE_STORES[tienda]['deposit'] != shopify.DEFAULT_DEPOSIT:
+                            response = shopify.set_default_inventory_level(variant['inventory_item_id'])
+                            if response:
+                                logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
+
+                logger.info(f"Updating images for product {product['id']} in Shopify")
+
+                prod_img_shopify = set()
+                response = shopify.get_product_images(shopify_product['id'])
+                if response:
+                    prod_img_shopify = {str(img.get("alt")) for img in response.get("images", [])}
+
+                # logger.info(f"Fetched {len(prod_img_shopify)} images from Shopify's product ID {shopify_product['id']}")
+
+                images_to_upload = [
+                    img for img in tiendanube_images
+                    if str(img.get("alt")) not in prod_img_shopify
+                ]
+                logger.info(f"{len(images_to_upload)} images to load to Shopify")
+
+                futures = []
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    for image in images_to_upload:
+                        image_id = image.get("alt")
+                        # ⚠️ Convertir los variant_ids de Tiendanube a los de Shopify (vía SKU)
+                        variant_ids = [
+                            shopify_variant_map.get(str(rel["variant_id"]))
+                            for rel in relacion_variante_imagen
+                            if rel["image_id"] == image_id and shopify_variant_map.get(str(rel["variant_id"])) is not None
+                        ]
+
+                        futures.append(
+                            # executor.submit(upload_image_to_shopify, image, variant_ids, url, headers)
+                            executor.submit(shopify.upload_image_to_shopify, image, shopify_product['id'], variant_ids)
+                        )
+
+                    for future in as_completed(futures):
+                        result = future.result()
+                        print(f"Image {result['image_alt']} -> Status: {result['status']}")
+                        if result["status"] != 200:
+                            print(f"Error: {result['response']}")
+
+                logger.info(f"Product {product['id']} processed successfully")
+
+    except Exception as e:
+        logger.exception("Error occurred during product synchronization, Error: %s", str(e))
+
+    end_time = time.time()
+
+    logger.info(f"Products were created/updated in {calculate_execution_time(start_time, end_time)}")
+
+
+def update_all_products():
+    start_time = time.time()
+    logger.info("==========> Synchronizing products... <==========")
+    try:
+        for tienda in TIENDANUBE_STORES:
+            logger.info("#" * 50)
+            logger.info(f"Fetching products from {TIENDANUBE_STORES[tienda]['name']}")
+
+            # Obtengo los productos de Tiendanube
+            products = []
+            headers = TIENDANUBE_STORES[tienda]['headers']
+            products_quantity = TIENDANUBE_STORES[tienda].get('product_quantity')
+
+            fetched = 0
+            page = 1
+            products = []
+
+            while True:
+                remaining = products_quantity - fetched if products_quantity else 200
+                per_page = min(200, remaining)
+                params = {
+                    "per_page": per_page,
+                    "page": page,
+                    "published": "true",
+                    "sort_by": "created-at-descending",
+                }
+
+                url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
+                current_products = tiendanube.get_products(url, headers, params)
+                if not current_products:
+                    break
+
+                products.extend(current_products)
+                fetched += len(current_products)
+
+                # Si se especificó un límite y lo alcanzamos, cortamos
+                if products_quantity and fetched >= products_quantity:
+                    products = products[:products_quantity]
+                    break
+
+                # Si trajo menos de per_page, ya no hay más páginas
+                if len(current_products) < per_page:
+                    break
+
+                page += 1
+
+            logger.info(f"Total products to update: {len(products)}")
+            data = []
+
+            for product in products:
+
+                logger.info(f"Processing product {product['id']} from Tiendanube")
+
+                # Creo un array de las variantes de cada producto
+                tiendanube_variants = []
+                relacion_variante_imagen = []
+                for variant in product.get("variants", []):
+                    stock = variant["stock"] if variant["stock"] is not None else 999
+                    values = [v.get("es") for v in variant.get("values", [])]
+                    option1 = values[0] if len(values) > 0 else None
+                    option2 = values[1] if len(values) > 1 else None
+                    option3 = values[2] if len(values) > 2 else None
+
+                    tiendanube_variants.append({
+                        "sku": variant["id"],
+                        "grams": None,
+                        "price": calculate_price(variant["price"], variant["promotional_price"]),
+                        "weight": variant["weight"],
+                        "barcode": variant["barcode"],
+                        "option1": option1,
+                        "option2": option2,
+                        "option3": option3,
+                        "taxcode": None,
+                        "position": variant["position"],
+                        "weight_unit": None,
+                        "compare_at_price": calculate_price(variant["compare_at_price"]),
+                        "inventory_policy": "deny",
+                        "inventory_quantity": stock,
+                        "presentment_prices": [],
+                        "fulfillment_service": "manual",
+                        "inventory_management": "shopify"
+                    })
+
+                    # Relaciono la variante con la imagen
+                    # TODO aca se puede agregar el stock para actualizarlo si hace falta
+                    relacion_variante_imagen.append({
+                        "variant_id": variant["id"],  # es el sku de la variante en shopify
+                        "image_id": variant["image_id"]  # es el alt de la imagen en shopify
+                    })
+
+                logger.info(f"Fetched {len(tiendanube_variants)} variants for product {product['id']}")
+
+                tiendanube_images = []
+                for img in product.get("images", []):
+                    imagen = preparar_imagen_por_src(img)
+                    if imagen:
+                        tiendanube_images.append(imagen)
+
+                existing_tags = set(product.get("tags", "").split(","))
+
+                # Limpiá espacios (por si vienen tags con espacio al principio o final)
+                existing_tags = {tag.strip() for tag in existing_tags if tag.strip()}
+
+                # Agregá las categorías si no están ya
+                for handle_category in product.get("categories", []):
+                    tag_handle = handle_category["handle"]["es"].strip()
+                    tag_name = handle_category["name"]["es"].strip()
+                    if tag_handle not in existing_tags:
+                        existing_tags.add(tag_handle)
+                    if tag_name not in existing_tags:
+                        existing_tags.add(tag_name)
+
+                existing_tags.add(tienda)
+                existing_tags.add(TIENDANUBE_STORES[tienda]['category'])
+
+                # Convertilo de nuevo a lista si necesitás
+                tiendanube_tags = []
+                tiendanube_tags = create_tags(existing_tags)
+
+                logger.info(f"Tags for product {product['id']}: {tiendanube_tags}")
+
+                # busco el producto en shopify por su handle, que es el id del producto en Tiendanube
+                logger.info(f"Searching for product {product['id']} in Shopify")
+                time.sleep(1)
+                shopify_product = None
+                params = {
+                    "handle": product["id"]
+                }
+                shopify_product = shopify.get_products(params)
+                shopify_product = shopify_product.get("products", [])[0] if shopify_product.get("products", []) else []
+
+                # formateo los atributos = options
+                tiendanube_attributes = [{"name": attr.get("es")} for attr in product.get("attributes", [])]
+                if not tiendanube_attributes:
+                    tiendanube_attributes.append({
+                        "name": "Title"
+                    })
+
+                product_description = product["description"]["es"]
+                soup = BeautifulSoup(product_description, "html.parser")
+                text_only = soup.get_text(separator="\n")
+                product_description = html.unescape(text_only)
+
+                if shopify_product:
+                    # Si el producto existe, lo actualizo
+                    logger.info(f"Updating product {product['id']} in Shopify")
+                    data = {
+                        "product": {
+                            "id": shopify_product['id'],
+                            "handle": product["id"],
+                            "title": product["name"]["es"],
+                            "body_html": product_description,
+                            "vendor": tienda,
+                            "product_type": TIENDANUBE_STORES[tienda]['category'],
+                            "tags": tiendanube_tags,
+                            "variants": tiendanube_variants,
+                            "published": product["published"],
+                            "options": tiendanube_attributes or shopify_product['options']
+                        }
+                    }
+                    time.sleep(0.3)
+                    response = shopify.update_product(shopify_product['id'], data)
+
+                else:
+                    # Si el producto no existe, lo creo
+                    data = {
+                        "product": {
+                            "title": product["name"]["es"],
+                            "handle": product["id"],
+                            "options": tiendanube_attributes,
+                            "body_html": product_description,
+                            "vendor": tienda,
+                            "product_type": TIENDANUBE_STORES[tienda]['category'],
+                            "tags": tiendanube_tags,
+                            "published": product["published"],
+                            "status": "active",
+                            "variants": tiendanube_variants
+                        }
+                    }
+
+                    time.sleep(0.3)
                     response = shopify.create_product(data)
 
                 # Si el producto se crea correctamente, actualizo las imagenes
@@ -502,7 +771,10 @@ def create_collections(categories_to_create):
                 "smart_collection": {
                     "title": cat_general,
                     "handle": cat_general,
-                    "rules": [{"column": "tag", "relation": "equals", "condition": cat_general}],
+                    "rules": [
+                        {"column": "tag", "relation": "equals", "condition": cat_general},
+                        {"column": "inventory_total", "relation": "greater_than", "condition": "0"}
+                    ],
                     "published": True
                 }
             }
@@ -519,7 +791,8 @@ def create_collections(categories_to_create):
                     "handle": f"{cat_general}-{second_level}",
                     "rules": [
                         {"column": "tag", "relation": "equals", "condition": cat_general},
-                        {"column": "tag", "relation": "equals", "condition": second_level}
+                        {"column": "tag", "relation": "equals", "condition": second_level},
+                        {"column": "inventory_total", "relation": "greater_than", "condition": "0"}
                     ],
                     "published": True
                 }
@@ -540,7 +813,8 @@ def create_collections(categories_to_create):
                         "rules": [
                             {"column": "tag", "relation": "equals", "condition": cat_general},
                             {"column": "tag", "relation": "equals", "condition": second_level},
-                            {"column": "tag", "relation": "equals", "condition": specific}
+                            {"column": "tag", "relation": "equals", "condition": specific},
+                            {"column": "inventory_total", "relation": "greater_than", "condition": "0"}
                         ],
                         "published": True
                     }
@@ -581,9 +855,19 @@ def sync_stock():
 
 @app.on_event("startup")
 def start_scheduler():
-    logger.info("Starting scheduler")
-    scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
-    scheduler.add_job(collection_and_products, 'interval', hours=6, next_run_time=datetime.now() + timedelta(minutes=1))
+    logger.info("Starting schedulers")
+    def startup_sequence():
+        create_collections(CATEGORIES_TO_CREATE)
+        try:
+            update_all_products()
+            logger.info("Starting scheduler for sync_stock")
+            scheduler.add_job(sync_stock, 'interval', minutes=15, id='sync_stock_job', max_instances=1, coalesce=True)
+            logger.info("Starting scheduler for sync_products")
+            scheduler.add_job(sync_products, 'interval', hours=6, id="sync_products_job", max_instances=1, coalesce=True)
+        except Exception as e:
+            logger.error(f"Error el en startup_sequence: {e}")
+
+    scheduler.add_job(startup_sequence, trigger='date', run_date=datetime.now() + timedelta(seconds=10), id="initial_update_job")
     scheduler.start()
 
 
