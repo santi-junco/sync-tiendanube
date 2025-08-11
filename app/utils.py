@@ -316,7 +316,7 @@ def create_tags(datos):
         categoria_general = "bazar"
     elif any(palabra in datos_lower for palabra in ["blanqueria", "dormitorio"]):
         categoria_general = "blanqueria"
-    else: 
+    else:
         categorias_generales = {"indumentaria", "perfumeria", "electronica", "valija bolso", "textil hogar"}
         categoria_general = next((item for item in datos_lower if item in categorias_generales), None)
 
@@ -324,6 +324,7 @@ def create_tags(datos):
 
     datos_lower.add(normalizar(categoria_general))
     datos_lower.add(normalizar(categoria_especifica))
+    datos_lower.add(normalizar(publico_objetivo))
     logger.info(f"Datos normalizados: {datos_lower}")
 
     categorias = asignar_categoria_jerarquica(datos_lower)
@@ -331,6 +332,7 @@ def create_tags(datos):
     categorias.append(publico_objetivo)
 
     return categorias
+
 
 def normalizar(texto):
     if not isinstance(texto, str):

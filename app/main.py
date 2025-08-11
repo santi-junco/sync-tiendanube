@@ -135,19 +135,15 @@ def sync_products():
             fetched = 0
             page = 1
             products = []
+            per_page = 200
 
             while True:
-                remaining = products_quantity - fetched if products_quantity else 200
-                per_page = min(200, remaining)
                 params = {
                     "per_page": per_page,
                     "page": page,
                     "published": "true",
                     "sort_by": "created-at-descending",
                 }
-
-                if not products_quantity:
-                    params["updated_at_min"] = updated_at_min
 
                 url = f"{TIENDANUBE_STORES[tienda]['url']}/products"
                 current_products = tiendanube.get_products(url, headers, params)
@@ -156,6 +152,8 @@ def sync_products():
 
                 products.extend(current_products)
                 fetched += len(current_products)
+
+                logger.info(f"Página {page} - Productos descargados: {len(current_products)}")
 
                 # Si se especificó un límite y lo alcanzamos, cortamos
                 if products_quantity and fetched >= products_quantity:
@@ -168,31 +166,39 @@ def sync_products():
 
                 page += 1
 
-            if products_quantity:
-                filtered_data = []
-                products_from_shopify = shopify.get_products_by_vendor(tienda).get("products", [])
-                products_to_eliminate = []
-                products_id_from_tiendanube = [str(p.get("id")) for p in products]
-                for product in products_from_shopify:
-                    if product.get("handle") not in products_id_from_tiendanube:
-                        products_to_eliminate.append(product)
-                logger.info(f"Products to eliminate: {len(products_to_eliminate)}")
-                for product in products_to_eliminate:
-                    shopify.delete_product(product.get("id"))
+            # Obtengo los productos de Shopify
+            products_from_shopify = shopify.get_products_by_vendor(tienda)
+            logger.info(f"Total products from Shopify: {len(products_from_shopify)}")
 
-                for product in products:
-                    if product.get('updated_at') and product['updated_at'] >= updated_at_min:
-                        filtered_data.append(product)
-                        continue
+            products_to_eliminate = []
+            ids_tiendanube = {str(p.get("id")) for p in products}
 
-                    for variant in product.get('variants', []):
-                        if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
-                            filtered_data.append(product)
-                            break
+            for product in products_from_shopify:
+                if product.get("handle") not in ids_tiendanube:
+                    products_to_eliminate.append(product)
 
-                products = filtered_data
+            logger.info(f"Productos a eliminar de Shopify: {len(products_to_eliminate)}")
+            for product in products_to_eliminate:
+                logger.info(f"Eliminando producto: ID={product.get('id')} HANDLE={product.get('handle')}")
+                shopify.delete_product(product.get("id"))
 
-            logger.info(f"Total products to update: {len(products)}")
+            recently_updated_products = []
+            for product in products:
+                if product.get('updated_at') and product['updated_at'] >= updated_at_min:
+                    recently_updated_products.append(product)
+                    continue
+
+                for variant in product.get('variants', []):
+                    if variant.get('updated_at') and variant['updated_at'] >= updated_at_min:
+                        recently_updated_products.append(product)
+                        break
+
+            logger.info(f"Productos a sincronizar por actualización reciente: {len(recently_updated_products)}")
+
+            # Resultado final
+            products = recently_updated_products
+            products.reverse()
+
             data = []
 
             for product in products:
@@ -303,6 +309,7 @@ def sync_products():
                             "tags": tiendanube_tags,
                             "variants": tiendanube_variants,
                             "published": product["published"],
+                            "status": "active",
                             "options": tiendanube_attributes or shopify_product['options']
                         }
                     }
@@ -435,11 +442,10 @@ def update_all_products():
 
             fetched = 0
             page = 1
+            per_page = 200
             products = []
 
             while True:
-                remaining = products_quantity - fetched if products_quantity else 200
-                per_page = min(200, remaining)
                 params = {
                     "per_page": per_page,
                     "page": page,
@@ -466,6 +472,7 @@ def update_all_products():
 
                 page += 1
 
+            products.reverse()
             logger.info(f"Total products to update: {len(products)}")
             data = []
 
@@ -857,6 +864,7 @@ def sync_stock():
 @app.on_event("startup")
 def start_scheduler():
     logger.info("Starting schedulers")
+
     def startup_sequence():
         create_collections(CATEGORIES_TO_CREATE)
         try:

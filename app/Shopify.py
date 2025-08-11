@@ -141,12 +141,54 @@ class Shopify():
                 "limit": 250
             }
 
-        response = requests.get(f"{self.SHOPIFY_API_URL}/products.json", params=params, headers=self.SHOPIFY_HEADERS)
-        if response.status_code != 200:
-            logger.error(f"Error fetching products by vendor from Shopify: {response.status_code} - {response.text}")
-            return {}
-        logger.info(f"Fetched {len(response.json().get('products', []))} products by vendor {vendor} from Shopify")
-        return response.json()
+        all_products = []
+        next_page_info = None
+        seen_page_info = set()
+
+        while True:
+            request_params = params.copy()
+            if next_page_info:
+                request_params = {"limit": 250, "page_info": next_page_info}
+
+            response = requests.get(
+                f"{self.SHOPIFY_API_URL}/products.json",
+                params=request_params,
+                headers=self.SHOPIFY_HEADERS
+            )
+
+            if response.status_code != 200:
+                logger.error(
+                    f"Error fetching products by vendor from Shopify: "
+                    f"{response.status_code} - {response.text}"
+                )
+                break
+
+            products = response.json().get("products", [])
+            all_products.extend(products)
+            logger.info(f"Fetched {len(products)} products (total so far: {len(all_products)})")
+
+            # Analizar el header Link y buscar solo el rel="next"
+            link_header = response.headers.get("Link", "")
+            next_page_info = None
+
+            if 'rel="next"' in link_header:
+                import re
+                matches = re.findall(r'<([^>]+)>; rel="next"', link_header)
+                if matches:
+                    next_url = matches[0]
+                    match = re.search(r'page_info=([^&>]+)', next_url)
+                    if match:
+                        candidate_page_info = match.group(1)
+                        if candidate_page_info not in seen_page_info:
+                            seen_page_info.add(candidate_page_info)
+                            next_page_info = candidate_page_info
+
+            # Si no hay más páginas, salir
+            if not next_page_info:
+                break
+
+        logger.info(f"Total products fetched for vendor {vendor}: {len(all_products)}")
+        return all_products
 
     def delete_product(self, product_id: int, data: dict = None):
         """Esta funcion "elimina" un producto de shopify, pero en realidad lo desactiva
