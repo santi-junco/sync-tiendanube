@@ -52,20 +52,28 @@ TAGS_EQUIVALENCIA = {
         "buzos": "abrigo",
     },
     "bazar": {
-        "repasador": "manteleria",
-        "repasadores": "manteleria",
+        # "repasador": "manteleria",
+        # "repasadores": "manteleria",
 
-        "servilleta": "manteleria",
-        "servilletas": "manteleria",
+        # "servilleta": "manteleria",
+        # "servilletas": "manteleria",
 
-        "mantel": "manelteria",
-        "manteles": "manelteria",
-        "manteleria": "manelteria",
-        "mantelerias": "manelteria",
-        "individual": "manelteria",
-        "individuales": "manelteria",
-        "camino de mesa": "manelteria",
-        "caminos de mesa": "manelteria",
+        # "mantel": "manelteria",
+        # "manteles": "manelteria",
+        # "manteleria": "manelteria",
+        # "mantelerias": "manelteria",
+        # "individual": "manelteria",
+        # "individuales": "manelteria",
+        # "camino de mesa": "manelteria",
+        # "caminos de mesa": "manelteria",
+
+        "cuchillo": "cubierto",
+        "cuchillos": "cubierto",
+
+        "toalla": "toalla",
+        "toallas": "toalla",
+        "toallon": "toalla",
+        "toallones": "toalla",
 
     },
     "textil hogar": {
@@ -128,10 +136,6 @@ TAGS_EQUIVALENCIA = {
         "cortina": "cortina",
         "cortinas": "cortina",
 
-        "toalla": "toalla",
-        "toallas": "toalla",
-        "toallon": "toalla",
-        "toallones": "toalla",
     },
     "valija bolso": {
         "accesorios": "accesorio",
@@ -158,10 +162,11 @@ CATEGORIES_TO_CREATE = [
     ("indumentaria", "mujer", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
     ("indumentaria", "nino", ["pantalon", "remera", "camisa", "abrigo", "otro"]),
 
-    ("bazar", "manteleria", ["mantel", "repasador", "servilleta", "otro"]),
-    ("bazar", "cristaleria", ["otro"]),
-    ("bazar", "cocina", ["otro"]),
-    ("bazar", "bano", ["otro"]),
+    ("bazar", "cocina", ["olla", "cubierto", "otro"]),
+    ("bazar", "bano", ["cortina", "cesto", "toalla", "otro"]),
+
+    ("blanqueria", "ropa-cama", ["sabana", "frazada", "acolchado", "almohada", "otro"]),
+    ("blanqueria", "cortina", ["otro"]),
 
     ("electronica", "celulares", ["accesorios", "otro"]),
     ("electronica", "computadora", ["accesorios", "otro"]),
@@ -169,11 +174,6 @@ CATEGORIES_TO_CREATE = [
 
     ("perfumeria", "hombre", ["perfume", "otro"]),
     ("perfumeria", "mujer", ["perfume", "otro"]),
-
-    ("blanqueria", "ropa-cama", ["sabana", "frazada", "acolchado", "almohada", "otro"]),
-    ("blanqueria", "alfombra", ["otro"]),
-    ("blanqueria", "cortina", ["otro"]),
-    ("blanqueria", "toalla", ["otro"]),
 
     ("valija-bolso", "accesorio", ["de-viaje", "beauty", "otro"]),
     ("valija-bolso", "mochila", ["portanotebook", "urbana", "materas", "otro"]),
