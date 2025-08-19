@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.logger import logger
 from app.Shopify import Shopify
 from app.Tiendanube import Tiendanube
-from app.utils import calculate_execution_time, build_full_handle, preparar_imagen_por_src, calculate_price, create_tags, CATEGORIES_TO_CREATE
+from app.utils import calculate_execution_time, preparar_imagen_por_src, calculate_price, create_tags, CATEGORIES_TO_CREATE
 
 # Cargar variables de entorno desde el archivo .env
 env_path = Path(__file__).resolve().parent.parent / '.env'
@@ -340,10 +340,14 @@ def sync_products():
                 if response:
                     shopify_product = response.get("product", [])
                     shopify_product_variants = shopify_product.get("variants", [])
+                    variants_graphql_api_id = []
 
                     # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
                     shopify_variant_map = {}
                     for variant in shopify_product_variants:
+
+                        variants_graphql_api_id.append(variant["admin_graphql_api_id"])
+
                         # shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
                         sku = str(variant.get("sku"))
                         shopify_variant_map[sku] = variant.get("id")
@@ -379,6 +383,10 @@ def sync_products():
                             response = shopify.set_default_inventory_level(variant['inventory_item_id'])
                             if response:
                                 logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
+
+                    delivery_profile = TIENDANUBE_STORES[tienda].get('delivery_profile')
+                    if delivery_profile:
+                        shopify.add_variants_to_delivery_profile(delivery_profile, variants_graphql_api_id)
 
                 logger.info(f"Updating images for product {product['id']} in Shopify")
 
@@ -614,6 +622,7 @@ def update_all_products():
                 if response:
                     shopify_product = response.get("product", [])
                     shopify_product_variants = shopify_product.get("variants", [])
+                    variants_graphql_api_id = []
 
                     # Mapear variantes de Tiendanube (por SKU) a IDs de variantes en Shopify
                     shopify_variant_map = {}
@@ -621,6 +630,8 @@ def update_all_products():
                         # shopify_variant_map[str(variant.get("sku"))] = variant.get("id")
                         sku = str(variant.get("sku"))
                         shopify_variant_map[sku] = variant.get("id")
+
+                        variants_graphql_api_id.append(variant["admin_graphql_api_id"])
 
                         inventory_item_id = variant.get("inventory_item_id")
                         if not inventory_item_id:
@@ -653,6 +664,10 @@ def update_all_products():
                             response = shopify.set_default_inventory_level(variant['inventory_item_id'])
                             if response:
                                 logger.info(f"Stock updated successfully for variant {variant['id']} from Shopify")
+
+                    delivery_profile = TIENDANUBE_STORES[tienda].get('delivery_profile')
+                    if delivery_profile:
+                        shopify.add_variants_to_delivery_profile(delivery_profile, variants_graphql_api_id)
 
                 logger.info(f"Updating images for product {product['id']} in Shopify")
 
@@ -701,64 +716,6 @@ def update_all_products():
     logger.info(f"Products were created/updated in {calculate_execution_time(start_time, end_time)}")
 
 
-def create_smart_collections():
-    logger.info("==========> Creating smart collections... <==========")
-    logger.info("Fetching categories from Tiendanube")
-
-    params = {
-        "fields": "handle",
-        "limit": 250
-    }
-    response = shopify.get_smart_collections(params)
-    if response:
-        categories = response.get("smart_collections", [])
-
-    shopify_collections = [category["handle"] for category in categories]
-
-    for tienda in TIENDANUBE_STORES:
-        logger.info("#" * 50)
-        logger.info(f"Fetching categories from Tiendanube ID {tienda}")
-
-        # Obtengo las categorias de Tiendanube
-        url = f"{TIENDANUBE_STORES[tienda]['url']}/categories"
-        headers = TIENDANUBE_STORES[tienda]['headers']
-        params = {
-            "per_page": 200,
-        }
-        categories = tiendanube.get_categories(url, headers, params)
-
-        category_by_id = {cat["id"]: cat for cat in categories}
-
-        # Construir las colecciones con handle completo desde raíz
-
-        for category in categories:
-            smart_collections_full_hierarchy = {}
-            name = category["name"]["es"]
-            full_handle = build_full_handle(TIENDANUBE_STORES[tienda]['category'], category, category_by_id)
-
-            # Verificar si la colección ya existe en Shopify
-            if full_handle in shopify_collections:
-                logger.info(f"Collection {full_handle} already exists in Shopify")
-                continue
-
-            smart_collections_full_hierarchy = {
-                "smart_collection": {
-                    "title": name,
-                    "handle": full_handle.replace(',', '-'),
-                    "rules": [
-                        {
-                            "column": "tag",
-                            "relation": "equals",
-                            "condition": handle
-                        } for handle in full_handle.split(",")
-                    ],
-                    "published": True
-                }
-            }
-
-            shopify.create_smart_collection(smart_collections_full_hierarchy)
-
-
 def create_collections(categories_to_create):
     # Obtengo las collections que ya estan creadas
     params = {
@@ -781,7 +738,7 @@ def create_collections(categories_to_create):
                     "handle": cat_general,
                     "rules": [
                         {"column": "tag", "relation": "equals", "condition": cat_general},
-                        {"column": "inventory_total", "relation": "greater_than", "condition": "0"}
+                        {"column": "variant_inventory", "relation": "greater_than", "condition": "0"}
                     ],
                     "published": True
                 }
@@ -800,7 +757,7 @@ def create_collections(categories_to_create):
                     "rules": [
                         {"column": "tag", "relation": "equals", "condition": cat_general},
                         {"column": "tag", "relation": "equals", "condition": second_level},
-                        {"column": "inventory_total", "relation": "greater_than", "condition": "0"}
+                        {"column": "variant_inventory", "relation": "greater_than", "condition": "0"}
                     ],
                     "published": True
                 }
@@ -822,7 +779,7 @@ def create_collections(categories_to_create):
                             {"column": "tag", "relation": "equals", "condition": cat_general},
                             {"column": "tag", "relation": "equals", "condition": second_level},
                             {"column": "tag", "relation": "equals", "condition": specific},
-                            {"column": "inventory_total", "relation": "greater_than", "condition": "0"}
+                            {"column": "variant_inventory", "relation": "greater_than", "condition": "0"}
                         ],
                         "published": True
                     }

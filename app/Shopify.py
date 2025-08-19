@@ -238,3 +238,54 @@ class Shopify():
             }
             time.sleep(0.3)
             self.set_inventory_level(data)
+
+    def get_delivery_profile(self, body=None):
+        if not body:
+            body = """{
+                deliveryProfiles(first: 10) {
+                    edges {
+                    node {
+                        id
+                        name
+                    }
+                    }
+                }
+            }"""
+        response = requests.post(f"{self.SHOPIFY_API_URL}/graphql.json", headers=self.SHOPIFY_HEADERS, json={"query": body})
+        return response.json()
+
+    def add_variants_to_delivery_profile(self, delivery_profile_id, product_variants_id):
+        body = """mutation assignVariantsToProfile($profileId: ID!, $variantIds: [ID!]!) {
+            deliveryProfileUpdate(
+                id: $profileId
+                profile: {
+                    variantsToAssociate: $variantIds
+                }
+                ) {
+                profile {
+                    id
+                    name
+                }
+                userErrors {
+                    field
+                    message
+                }
+            }
+        }"""
+
+        variables = {
+            "profileId": delivery_profile_id,
+            "variantIds": product_variants_id
+        }
+
+        data = {
+            "query": body,
+            "variables": variables
+        }
+
+        response = requests.post(f"{self.SHOPIFY_API_URL}/graphql.json", headers=self.SHOPIFY_HEADERS, json=data)
+        if response.status_code != 200:
+            logger.error(f"Error adding variants to the delivery profile: {response.status_code} - {response.text}")
+            return {}
+        logger.info("Variants successfully added to the delivery profile")
+        return response.json()
