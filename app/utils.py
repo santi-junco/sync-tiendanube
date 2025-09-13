@@ -11,7 +11,7 @@ RANGOS_PRECIO = [
     (40000.00, 49999.99, 1.19),
     (50000.00, 59999.99, 1.16),
     (60000.00, 99999.99, 1.14),
-    (100000.00, 199999.99, 1.12),
+    (100000.00, 999999.99, 1.12),
 ]
 
 
@@ -271,7 +271,8 @@ def calculate_price(price, promotional_price=None, rango_precio=None):
 
     except (TypeError, ValueError) as e:
         logger.error(f"Error al calcular el precio: {e}")
-        return price  # Devolver el precio original en caso de error
+        logger.error(f"Precio: {price}, Promotional Price: {promotional_price}, Rango Precio: {rango_precio}")
+        return price if price is not None else 0
 
 
 def asignar_categoria_jerarquica(info_set):
